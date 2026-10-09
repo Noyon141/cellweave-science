@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "datasets": [
+    {
+      "key": "small_smoke_dataset",
+      "organism": "human",
+      "expectedCells": 100,
+      "expectedGenes": 200,
+      "sourceFormat": "10x_h5",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "description": "Minimal synthetic smoke test dataset for CI execution"
+    },
+    {
+      "key": "human_pbmc_dataset",
+      "organism": "human",
+      "expectedCells": 2700,
+      "expectedGenes": 32738,
+      "sourceFormat": "10x_mtx",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "description": "Human PBMC 3k reference dataset"
+    },
+    {
+      "key": "mouse_dataset",
+      "organism": "mouse",
+      "expectedCells": 1500,
+      "expectedGenes": 25000,
+      "sourceFormat": "10x_h5",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "description": "Mouse cortex reference dataset"
+    },
+    {
+      "key": "multi_sample_dataset",
+      "organism": "human",
+      "expectedCells": 8000,
+      "expectedGenes": 30000,
+      "sourceFormat": "h5ad",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+      "description": "Four-sample human dataset for per-sample QC validation"
+    },
+    {
+      "key": "batch_effect_dataset",
+      "organism": "human",
+      "expectedCells": 12000,
+      "expectedGenes": 30000,
+      "sourceFormat": "h5ad",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+      "description": "Multi-batch dataset exhibiting technical batch variance"
+    },
+    {
+      "key": "known_treatment_dataset",
+      "organism": "human",
+      "expectedCells": 10000,
+      "expectedGenes": 30000,
+      "sourceFormat": "h5ad",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000006",
+      "description": "Treatment vs Control study with biological replicates"
+    },
+    {
+      "key": "large_benchmark_dataset",
+      "organism": "human",
+      "expectedCells": 100000,
+      "expectedGenes": 35000,
+      "sourceFormat": "h5ad",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+      "description": "Large scale benchmark dataset for stress testing"
+    }
+  ]
+}
