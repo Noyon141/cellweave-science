@@ -9,7 +9,10 @@ from cellweave_science.adapters.local import LocalComputeAdapter
 from cellweave_science.adapters.modal_adapter import ModalComputeAdapter
 from cellweave_science.annotation import AnnotationProvider
 from cellweave_science.clustering import ClusteringEngine
-from cellweave_science.differential_expression import DifferentialExpressionEngine, MarkerGeneDiscovery
+from cellweave_science.differential_expression import (
+    DifferentialExpressionEngine,
+    MarkerGeneDiscovery,
+)
 from cellweave_science.embeddings import EmbeddingEngine
 from cellweave_science.exports import ExportBundleGenerator
 from cellweave_science.importers import DatasetImporter

@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import random
 from types import TracebackType
-from typing import Optional, Type
 
 DEFAULT_SEED: int = 42
 
@@ -46,7 +45,7 @@ class DeterministicSeedContext:
 
     def __init__(self, seed: int = DEFAULT_SEED) -> None:
         self.seed = seed
-        self._python_state: Optional[tuple[object, ...]] = None
+        self._python_state: tuple[object, ...] | None = None
 
     def __enter__(self) -> DeterministicSeedContext:
         self._python_state = random.getstate()
@@ -55,9 +54,9 @@ class DeterministicSeedContext:
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self._python_state is not None:
             random.setstate(self._python_state)

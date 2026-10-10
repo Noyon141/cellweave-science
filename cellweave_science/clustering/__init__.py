@@ -6,7 +6,7 @@ Algorithm implementations belong to Phase 6.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -18,7 +18,7 @@ class ClusteringEngine(Protocol):
         input_path: str,
         resolution: float = 1.0,
         output_path: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Compute Leiden cluster assignments with deterministic seeds."""
         ...
 

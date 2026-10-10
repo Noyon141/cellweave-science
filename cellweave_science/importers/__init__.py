@@ -12,7 +12,7 @@ Algorithm implementations belong to Phase 3.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -27,7 +27,7 @@ class DatasetImporter(Protocol):
         """Validate structural integrity of source dataset before import."""
         ...
 
-    def inspect(self, file_path: str) -> Dict[str, Any]:
+    def inspect(self, file_path: str) -> dict[str, Any]:
         """Extract dataset dimensions, cell/gene identifiers, and metadata without full load."""
         ...
 
@@ -35,7 +35,7 @@ class DatasetImporter(Protocol):
         """Convert source dataset to canonical AnnData (.h5ad)."""
         ...
 
-    def metadata(self, file_path: str) -> Dict[str, Any]:
+    def metadata(self, file_path: str) -> dict[str, Any]:
         """Extract canonical dataset metadata."""
         ...
 

@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Optional
 
-from cellweave_science.contracts.models import (
+from cellweave_science.contracts import (
     ComputeJobCancelRequest,
     ComputeJobResultResponse,
     ComputeJobStatusResponse,
@@ -60,7 +59,7 @@ class ComputeAdapter(ABC):
     def execute_payload_sync(
         self,
         payload: ScientificJobPayload,
-        resource_class: Optional[ResourceClass] = None,
+        resource_class: ResourceClass | None = None,
     ) -> ComputeJobResultResponse:
         """Direct synchronous execution entrypoint for testing and local smoke runs."""
         ...

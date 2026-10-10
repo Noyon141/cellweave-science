@@ -28,6 +28,7 @@ def test_benchmark_tiers_defined() -> None:
 @pytest.mark.benchmark
 def test_benchmark_runner_profiles_routine() -> None:
     """Verify BenchmarkRunner executes and captures timings accurately."""
+
     def sample_routine() -> str:
         # Simulate quick work
         _ = sum(i * i for i in range(1000))

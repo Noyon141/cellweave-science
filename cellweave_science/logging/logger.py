@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from typing import Any, Dict
+from typing import Any
 
 
 class ScientificDataSanitizerFilter(logging.Filter):
@@ -50,8 +50,8 @@ class ScientificDataSanitizerFilter(logging.Filter):
 
         return True
 
-    def _sanitize_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        sanitized: Dict[str, Any] = {}
+    def _sanitize_dict(self, data: dict[str, Any]) -> dict[str, Any]:
+        sanitized: dict[str, Any] = {}
         for key, value in data.items():
             key_lower = key.lower()
             if any(fragment in key_lower for fragment in self.FORBIDDEN_KEY_FRAGMENTS):
@@ -74,7 +74,7 @@ class JsonFormatter(logging.Formatter):
     """Format logs as structured single-line JSON records."""
 
     def format(self, record: logging.LogRecord) -> str:
-        log_payload: Dict[str, Any] = {
+        log_payload: dict[str, Any] = {
             "timestamp": self.formatTime(record, self.datefmt),
             "level": record.levelname,
             "logger": record.name,
@@ -108,7 +108,7 @@ class ScienceLogger:
     def debug(self, message: str, **kwargs: Any) -> None:
         self._log(logging.DEBUG, message, kwargs)
 
-    def _log(self, level: int, message: str, structured_data: Dict[str, Any]) -> None:
+    def _log(self, level: int, message: str, structured_data: dict[str, Any]) -> None:
         sanitizer = ScientificDataSanitizerFilter()
         sanitized_data = sanitizer._sanitize_dict(structured_data)
         self._logger.log(level, message, extra={"structured_data": sanitized_data})

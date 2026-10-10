@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import random
+
 import pytest
 
 from cellweave_science.seeds.seed import (
-    DEFAULT_SEED,
     DeterministicSeedContext,
     set_deterministic_seeds,
 )

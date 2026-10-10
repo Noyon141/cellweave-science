@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
+
 import pytest
 
 from cellweave_science.adapters.compute import ComputeMode
 from cellweave_science.adapters.local import LocalComputeAdapter
 from cellweave_science.adapters.modal_adapter import ModalComputeAdapter
-from cellweave_science.contracts.models import (
+from cellweave_science.contracts import (
     ComputeJobCancelRequest,
     ComputeJobSubmitRequest,
     ResourceClass,
@@ -17,7 +18,7 @@ from cellweave_science.contracts.models import (
 
 
 @pytest.mark.unit
-def test_local_adapter_lifecycle(sample_job_payload_dict: Dict[str, Any]) -> None:
+def test_local_adapter_lifecycle() -> None:
     """Verify local adapter submit, status, execute, and cancel workflow."""
     adapter = LocalComputeAdapter()
     assert adapter.mode == ComputeMode.LOCAL
@@ -49,7 +50,7 @@ def test_local_adapter_lifecycle(sample_job_payload_dict: Dict[str, Any]) -> Non
 
 
 @pytest.mark.unit
-def test_local_adapter_sync_execution(sample_job_payload_dict: Dict[str, Any]) -> None:
+def test_local_adapter_sync_execution(sample_job_payload_dict: dict[str, Any]) -> None:
     """Verify local adapter synchronous payload execution."""
     adapter = LocalComputeAdapter()
     payload = ScientificJobPayload.model_validate(sample_job_payload_dict)

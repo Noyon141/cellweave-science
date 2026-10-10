@@ -7,16 +7,14 @@ scientific domain logic is not coupled to Modal SDK primitives directly.
 from __future__ import annotations
 
 import time
-from typing import Dict, Optional
 
 from cellweave_science.adapters.compute import ComputeAdapter, ComputeMode
-from cellweave_science.contracts.models import (
+from cellweave_science.contracts import (
     ComputeJobCancelRequest,
     ComputeJobMetrics,
     ComputeJobResultResponse,
     ComputeJobStatusResponse,
     ComputeJobSubmitRequest,
-    DomainError,
     ResourceClass,
     ScientificJobPayload,
 )
@@ -25,7 +23,7 @@ from cellweave_science.logging.logger import get_logger
 logger = get_logger("cellweave_science.adapters.modal")
 
 # Resource profile mapping from logical ResourceClass to Modal resource configurations
-MODAL_RESOURCE_CONFIGS: Dict[ResourceClass, Dict[str, float | int | str]] = {
+MODAL_RESOURCE_CONFIGS: dict[ResourceClass, dict[str, float | int | str]] = {
     ResourceClass.CPU_SMALL: {"cpu": 2.0, "memory": 4096},
     ResourceClass.CPU_MEMORY: {"cpu": 4.0, "memory": 16384},
     ResourceClass.CPU_HIGH_MEMORY: {"cpu": 8.0, "memory": 65536},
@@ -39,13 +37,13 @@ class ModalComputeAdapter(ComputeAdapter):
 
     def __init__(self, app_name: str = "cellweave-science") -> None:
         self.app_name = app_name
-        self._submitted_jobs: Dict[str, ComputeJobSubmitRequest] = {}
+        self._submitted_jobs: dict[str, ComputeJobSubmitRequest] = {}
 
     @property
     def mode(self) -> ComputeMode:
         return ComputeMode.MODAL
 
-    def get_resource_config(self, resource_class: ResourceClass) -> Dict[str, float | int | str]:
+    def get_resource_config(self, resource_class: ResourceClass) -> dict[str, float | int | str]:
         """Resolve logical resource profile to concrete Modal hardware limits."""
         return MODAL_RESOURCE_CONFIGS.get(
             resource_class,
@@ -92,7 +90,6 @@ class ModalComputeAdapter(ComputeAdapter):
         return True
 
     def get_result(self, job_id: str, provider_job_id: str) -> ComputeJobResultResponse:
-        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         return ComputeJobResultResponse(
             jobId=job_id,
             providerJobId=provider_job_id,
@@ -108,12 +105,11 @@ class ModalComputeAdapter(ComputeAdapter):
     def execute_payload_sync(
         self,
         payload: ScientificJobPayload,
-        resource_class: Optional[ResourceClass] = None,
+        resource_class: ResourceClass | None = None,
     ) -> ComputeJobResultResponse:
         """Modal synchronous placeholder execution."""
         selected_resource = resource_class or payload.resourceClass or ResourceClass.CPU_SMALL
         provider_job_id = f"modal-sync-{payload.jobId}"
-        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         logger.info(
             "Modal execution requested",

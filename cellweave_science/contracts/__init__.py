@@ -1,10 +1,11 @@
 """CellWeave Contracts integration module for cellweave-science.
 
-Provides typed access to authoritative generated Pydantic v2 contract models,
-ensuring zero contract drift across repository boundaries.
+Provides typed access to authoritative generated Pydantic v2 contract models
+directly from the cellweave_contracts package.
+Zero schemas or models are independently maintained in this repository.
 """
 
-from cellweave_science.contracts.models import (
+from cellweave_contracts import (
     AccountState,
     ArtifactLineageRelation,
     ArtifactManifest,
@@ -19,8 +20,7 @@ from cellweave_science.contracts.models import (
     ComputeJobSubmitRequest,
     DomainError,
     HealthResponse,
-    PolarWebhookData,
-    PolarWebhookPayload,
+    PolarWebhookReceipt,
     ResourceClass,
     RunManifest,
     RunManifestArtifactSummary,
@@ -51,8 +51,7 @@ __all__ = [
     "ComputeJobSubmitRequest",
     "DomainError",
     "HealthResponse",
-    "PolarWebhookData",
-    "PolarWebhookPayload",
+    "PolarWebhookReceipt",
     "ResourceClass",
     "RunManifest",
     "RunManifestArtifactSummary",

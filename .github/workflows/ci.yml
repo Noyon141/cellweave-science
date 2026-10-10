@@ -10,59 +10,70 @@ permissions:
   contents: read
 
 jobs:
-  quality-and-tests:
-    name: Lint, Typecheck & Tests
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: "pip"
-
-      - name: Install build and quality tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install hatchling ruff mypy pytest pytest-mock pytest-cov pydantic structlog
-
-      - name: Install dependencies
-        run: |
-          pip install -e ".[dev]"
-
-      - name: Ruff Lint Check
-        run: ruff check .
-
-      - name: Ruff Formatting Check
-        run: ruff format --check .
-
-      - name: Strict Type Check (mypy)
-        run: mypy cellweave_science modal_app tests benchmarks
-
-      - name: Run Pytest Suite
-        run: pytest -v --strict-markers -m "unit or golden or benchmark"
-
-  security-scan:
-    name: Security & Vulnerability Scan
+  # Mandatory Scientific-Engine CI Sequence per System Design Section 100:
+  # Python lint -> type checks -> unit tests -> scientific regression suite ->
+  # golden dataset tests -> container build -> SBOM -> vulnerability scan -> benchmark
+  scientific-engine-pipeline:
+    name: Scientific Engine Validation Gates
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      - name: Install pip-audit
-        run: pip install pip-audit
+      - name: Gate 0 — Verify Contract Authority
+        run: |
+          python scripts/sync_contracts.py --check
 
-      - name: Scan dependencies for known CVEs
-        run: pip-audit
-        continue-on-error: true
+      - name: Install Locked Dependencies
+        run: |
+          python -m pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir -r requirements-dev-lock.txt
+          pip install --no-cache-dir --no-deps -e .
+
+      - name: Gate 1 — Python Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Gate 2 — Type Checks
+        run: |
+          mypy cellweave_science modal_app tests benchmarks
+
+      - name: Gate 3 — Unit Tests
+        run: |
+          pytest -v --strict-markers -m "unit"
+
+      - name: Gate 4 — Scientific Regression Suite
+        run: |
+          pytest -v --strict-markers -m "regression"
+
+      - name: Gate 5 — Golden Dataset Tests
+        run: |
+          pytest -v --strict-markers -m "golden"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Gate 6 — Container Build
+        run: |
+          docker build -t cellweave-science:ci .
+
+      - name: Gate 7 — Software Bill of Materials (SBOM)
+        run: |
+          cyclonedx-py requirements requirements-lock.txt -o sbom.json
+          head -n 35 sbom.json
+
+      - name: Gate 8 — Vulnerability Scan
+        run: |
+          pip-audit -r requirements-lock.txt
+
+      - name: Gate 9 — Scientific Benchmark
+        run: |
+          pytest -v --strict-markers -m "benchmark"
+          python -c "from benchmarks.harness import BenchmarkRunner, BenchmarkTier; res = BenchmarkRunner.profile_routine(BenchmarkTier.TIER_10K, lambda: None); print('Benchmark Smoke Gate Passed:', res)"

@@ -7,7 +7,7 @@ healthcheck job deployed to dev/staging environments for Phase 0 exit criteria.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import Any
 
 try:
     import modal
@@ -41,7 +41,7 @@ else:  # pragma: no cover
     app = None  # type: ignore[assignment]
 
 
-def healthcheck() -> Dict[str, Any]:
+def healthcheck() -> dict[str, Any]:
     """Phase 0 placeholder healthcheck function.
 
     Verifies that the scientific execution runtime is responsive and healthy.
@@ -56,4 +56,4 @@ def healthcheck() -> Dict[str, Any]:
 
 # Register healthcheck with Modal App if Modal is present
 if _MODAL_AVAILABLE and app is not None:
-    healthcheck = app.function(cpu=1.0, memory=1024)(healthcheck)
+    healthcheck = app.function(cpu=1.0, memory=1024)(healthcheck)  # type: ignore[assignment]

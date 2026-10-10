@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Optional
 
 
 class BenchmarkTier(str, Enum):
@@ -62,7 +62,7 @@ class BenchmarkRunner:
     @staticmethod
     def profile_routine(
         tier: BenchmarkTier,
-        func: Callable[[], Optional[str]],
+        func: Callable[[], str | None],
     ) -> BenchmarkResult:
         """Execute a target function and measure resource consumption.
 
@@ -94,3 +94,8 @@ class BenchmarkRunner:
             peak_ram_bytes=0,
             artifact_size_bytes=artifact_size,
         )
+
+
+if __name__ == "__main__":
+    smoke_result = BenchmarkRunner.profile_routine(BenchmarkTier.TIER_10K, lambda: None)
+    print("Benchmark harness smoke succeeded:", smoke_result)

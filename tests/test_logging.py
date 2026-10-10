@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import io
 import json
 import logging
+
 import pytest
 
 from cellweave_science.logging.logger import (
     JsonFormatter,
     ScientificDataSanitizerFilter,
-    get_logger,
 )
 
 

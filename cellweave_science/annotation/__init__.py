@@ -11,7 +11,7 @@ Implementations belong to Phase 7.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -33,7 +33,7 @@ class AnnotationProvider(Protocol):
         input_path: str,
         organism: str,
         min_confidence: float = 0.5,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Perform automated cell-type annotation."""
         ...
 

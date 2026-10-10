@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Dict, Generator
+from typing import Any, cast
 
 import pytest
 
@@ -27,7 +28,7 @@ def local_adapter() -> LocalComputeAdapter:
 
 
 @pytest.fixture
-def sample_job_payload_dict() -> Dict[str, Any]:
+def sample_job_payload_dict() -> dict[str, Any]:
     """Fixture providing a valid ScientificJobPayload dictionary."""
     return {
         "schemaVersion": "1.0.0",
@@ -72,7 +73,7 @@ def golden_manifest_path() -> Path:
 
 
 @pytest.fixture
-def golden_manifest(golden_manifest_path: Path) -> Dict[str, Any]:
+def golden_manifest(golden_manifest_path: Path) -> dict[str, Any]:
     """Loaded golden reference manifest dict."""
     with open(golden_manifest_path, encoding="utf-8") as f:
-        return json.load(f)
+        return cast(dict[str, Any], json.load(f))

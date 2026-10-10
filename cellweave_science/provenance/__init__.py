@@ -7,9 +7,9 @@ Guarantees full computational lineage and complete reproducibility.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from cellweave_science.contracts.models import ArtifactManifest, RunManifest
+from cellweave_science.contracts import ArtifactManifest, RunManifest
 
 
 @runtime_checkable
@@ -19,10 +19,10 @@ class ProvenanceTracker(Protocol):
     def record_step_execution(
         self,
         step_id: str,
-        parameters: Dict[str, Any],
-        software_versions: Dict[str, str],
-        random_seeds: Dict[str, int],
-    ) -> Dict[str, Any]:
+        parameters: dict[str, Any],
+        software_versions: dict[str, str],
+        random_seeds: dict[str, int],
+    ) -> dict[str, Any]:
         """Record step-level metadata and software environment."""
         ...
 

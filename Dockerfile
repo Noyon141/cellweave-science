@@ -17,15 +17,21 @@ RUN groupadd -g 10001 cellweave && \
 
 WORKDIR /app
 
-# Copy dependency configuration and install
-COPY pyproject.toml README.md ./
+# Copy locked dependencies, vendor packages, and packaging metadata
+COPY requirements-lock.txt pyproject.toml README.md ./
+COPY vendor/ ./vendor/
+
+# Install strictly from reproducible locked dependency set
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir hatchling && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir -r requirements-lock.txt && \
+    pip install --no-cache-dir --no-deps . && \
+    python -c "import site; p=site.getsitepackages()[0]+'/jaxlib_compat.pth'; open(p, 'w').write('import sys; from jax._src.lib import xla_client; sys.modules.setdefault(\"jaxlib.xla_extension\", xla_client)\n')"
 
 # Copy application source code
 COPY cellweave_science/ ./cellweave_science/
 COPY modal_app/ ./modal_app/
+COPY benchmarks/ ./benchmarks/
 
 # Switch to unprivileged user
 USER cellweave:cellweave

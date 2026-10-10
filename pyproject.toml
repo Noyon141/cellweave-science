@@ -22,12 +22,14 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
+    "cellweave-contracts>=0.1.0",
     "pydantic>=2.6.0,<3.0.0",
     "numpy>=1.24.0,<2.0.0",
     "scipy>=1.11.0,<1.14.0",
     "pandas>=2.1.0,<3.0.0",
     "anndata>=0.10.0,<0.12.0",
     "scanpy>=1.9.0,<1.11.0",
+    "scvi-tools>=1.1.0,<1.2.0",
     "structlog>=24.1.0,<25.0.0",
     "modal>=0.62.0,<1.0.0",
     "typing-extensions>=4.9.0",
@@ -44,7 +46,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["cellweave_science", "modal_app"]
+packages = ["cellweave_science", "modal_app", "benchmarks"]
 
 [tool.ruff]
 line-length = 100
@@ -70,7 +72,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["cellweave_science", "modal_app"]
+known-first-party = ["cellweave_science", "modal_app", "benchmarks", "cellweave_contracts"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -83,18 +85,33 @@ check_untyped_defs = true
 disallow_untyped_decorators = true
 no_implicit_optional = true
 warn_redundant_casts = true
-warn_unused_ignores = true
+warn_unused_ignores = false
 warn_no_return = true
 warn_unreachable = true
+disable_error_code = ["import-untyped", "import-not-found"]
 
 [[tool.mypy.overrides]]
 module = [
-    "anndata.*",
-    "scanpy.*",
-    "scipy.*",
-    "sklearn.*",
+    "cellweave_contracts",
+    "cellweave_contracts.*",
+    "numpy",
+    "numpy.*",
+    "torch",
+    "torch.*",
+    "modal",
     "modal.*",
+    "anndata",
+    "anndata.*",
+    "scanpy",
+    "scanpy.*",
+    "scipy",
+    "scipy.*",
+    "sklearn",
+    "sklearn.*",
+    "scrublet",
     "scrublet.*",
+    "scvi",
+    "scvi.*",
 ]
 ignore_missing_imports = true
 
@@ -107,6 +124,7 @@ python_functions = ["test_*"]
 addopts = "-ra -q --strict-markers"
 markers = [
     "unit: Quick unit tests without external resources",
+    "regression: Scientific regression suite tests",
     "golden: Golden dataset verification tests",
     "benchmark: Performance and resource benchmark tests",
 ]

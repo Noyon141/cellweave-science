@@ -7,7 +7,7 @@ Implementations belong to Phase 8.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -26,10 +26,10 @@ class PathwayProvider(Protocol):
 
     def run_enrichment(
         self,
-        genes: List[str],
+        genes: list[str],
         organism: str,
-        universe: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        universe: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Perform enrichment analysis on a gene list."""
         ...
 

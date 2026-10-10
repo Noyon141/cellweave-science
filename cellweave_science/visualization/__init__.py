@@ -8,7 +8,7 @@ Implementations belong to Phase 9.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -19,7 +19,7 @@ class VisualizationArtifactGenerator(Protocol):
         self,
         input_path: str,
         output_path: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate compact coordinates and cluster indices for client rendering."""
         ...
 
@@ -27,7 +27,7 @@ class VisualizationArtifactGenerator(Protocol):
         self,
         input_path: str,
         output_path: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate QC histogram and violin distribution points."""
         ...
 

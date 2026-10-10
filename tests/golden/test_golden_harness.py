@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
-import pytest
+from typing import Any
 
+import pytest
 
 REQUIRED_GOLDEN_KEYS = [
     "small_smoke_dataset",
@@ -19,7 +19,7 @@ REQUIRED_GOLDEN_KEYS = [
 
 
 @pytest.mark.golden
-def test_golden_manifest_contains_all_prescribed_datasets(golden_manifest: Dict[str, Any]) -> None:
+def test_golden_manifest_contains_all_prescribed_datasets(golden_manifest: dict[str, Any]) -> None:
     """Verify that golden_manifest.json contains all datasets required by System Design Section 102."""
     datasets = golden_manifest.get("datasets", [])
     present_keys = {ds["key"] for ds in datasets}
@@ -29,7 +29,7 @@ def test_golden_manifest_contains_all_prescribed_datasets(golden_manifest: Dict[
 
 
 @pytest.mark.golden
-def test_golden_manifest_dataset_attributes(golden_manifest: Dict[str, Any]) -> None:
+def test_golden_manifest_dataset_attributes(golden_manifest: dict[str, Any]) -> None:
     """Verify metadata validity and checksum formatting of golden datasets."""
     sha256_pattern = re.compile(r"^[a-f0-9]{64}$")
 

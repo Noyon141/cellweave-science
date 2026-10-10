@@ -2,35 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
-from cellweave_science.contracts.models import (
+from cellweave_science.contracts import (
     ArtifactManifest,
     ArtifactStorageRef,
     ArtifactType,
-    ComputeJobSubmitRequest,
     DomainError,
-    ResourceClass,
-    RunManifest,
     ScientificJobPayload,
     ScientificJobType,
 )
 
 
 @pytest.mark.unit
-def test_scientific_job_payload_valid(sample_job_payload_dict: Dict[str, Any]) -> None:
+def test_scientific_job_payload_valid(sample_job_payload_dict: dict[str, Any]) -> None:
     """Verify that a canonical job payload parses cleanly into Pydantic models."""
     payload = ScientificJobPayload.model_validate(sample_job_payload_dict)
     assert payload.jobId == "job-smoke-001"
-    assert payload.jobType == ScientificJobType.RUN_QC
+    assert payload.jobType == ScientificJobType.run_qc
     assert payload.inputs.primaryDataset.format == "h5ad"
     assert payload.manifestFragment.randomSeeds["default"] == 42
 
 
 @pytest.mark.unit
-def test_payload_invalid_sha256_rejected(sample_job_payload_dict: Dict[str, Any]) -> None:
+def test_payload_invalid_sha256_rejected(sample_job_payload_dict: dict[str, Any]) -> None:
     """Verify that invalid sha256 hashes are strictly rejected."""
     bad_dict = dict(sample_job_payload_dict)
     bad_dict["inputs"] = {
@@ -44,7 +42,7 @@ def test_payload_invalid_sha256_rejected(sample_job_payload_dict: Dict[str, Any]
 
 
 @pytest.mark.unit
-def test_contract_models_are_frozen(sample_job_payload_dict: Dict[str, Any]) -> None:
+def test_contract_models_are_frozen(sample_job_payload_dict: dict[str, Any]) -> None:
     """Ensure contract models are immutable (frozen=True) to prevent accidental mutation."""
     payload = ScientificJobPayload.model_validate(sample_job_payload_dict)
     with pytest.raises(ValidationError):
@@ -89,3 +87,23 @@ def test_artifact_manifest_schema() -> None:
     )
     assert manifest.type == ArtifactType.EMBEDDING
     assert manifest.storage.provider == "R2"
+
+
+@pytest.mark.unit
+def test_contracts_authority_and_no_duplicate_models() -> None:
+    """Verify that cellweave-science maintains no duplicate models.py and imports cellweave_contracts."""
+    from pathlib import Path
+
+    import cellweave_contracts
+    import cellweave_science.contracts as contracts_pkg
+
+    contracts_dir = Path(contracts_pkg.__file__).resolve().parent
+    duplicate_models_file = contracts_dir / "models.py"
+
+    assert not duplicate_models_file.exists(), (
+        "Duplicate models.py found in cellweave_science/contracts/! "
+        "Models must originate strictly from cellweave-contracts."
+    )
+    # Ensure re-exported types are identical to the authoritative package types
+    assert contracts_pkg.RunManifest is cellweave_contracts.RunManifest
+    assert contracts_pkg.ScientificJobPayload is cellweave_contracts.ScientificJobPayload

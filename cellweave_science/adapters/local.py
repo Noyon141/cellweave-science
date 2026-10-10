@@ -7,10 +7,9 @@ without connecting to Modal or requiring cloud credentials.
 from __future__ import annotations
 
 import time
-from typing import Dict, Optional
 
 from cellweave_science.adapters.compute import ComputeAdapter, ComputeMode
-from cellweave_science.contracts.models import (
+from cellweave_science.contracts import (
     ComputeJobCancelRequest,
     ComputeJobMetrics,
     ComputeJobResultResponse,
@@ -30,8 +29,8 @@ class LocalComputeAdapter(ComputeAdapter):
     """Local execution provider implementing the ComputeAdapter interface."""
 
     def __init__(self) -> None:
-        self._jobs: Dict[str, ComputeJobStatusResponse] = {}
-        self._results: Dict[str, ComputeJobResultResponse] = {}
+        self._jobs: dict[str, ComputeJobStatusResponse] = {}
+        self._results: dict[str, ComputeJobResultResponse] = {}
 
     @property
     def mode(self) -> ComputeMode:
@@ -86,7 +85,6 @@ class LocalComputeAdapter(ComputeAdapter):
         if job_id in self._results:
             return self._results[job_id]
 
-        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         return ComputeJobResultResponse(
             jobId=job_id,
             providerJobId=provider_job_id,
@@ -105,11 +103,12 @@ class LocalComputeAdapter(ComputeAdapter):
     def execute_payload_sync(
         self,
         payload: ScientificJobPayload,
-        resource_class: Optional[ResourceClass] = None,
+        resource_class: ResourceClass | None = None,
     ) -> ComputeJobResultResponse:
         """Synchronously execute a scientific job payload in local mode."""
         start_time = time.monotonic()
         provider_job_id = f"local-sync-{payload.jobId}"
+        _selected_resource = resource_class or payload.resourceClass or ResourceClass.CPU_SMALL
 
         # Enforce deterministic random seeds from the manifest fragment
         seed = payload.manifestFragment.randomSeeds.get("default", 42)

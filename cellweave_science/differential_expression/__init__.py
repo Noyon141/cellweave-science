@@ -8,7 +8,7 @@ Implementations belong to Phase 8.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -20,7 +20,7 @@ class MarkerGeneDiscovery(Protocol):
         input_path: str,
         group_key: str,
         method: str = "wilcoxon",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Identify cluster marker genes."""
         ...
 
@@ -35,7 +35,7 @@ class DifferentialExpressionEngine(Protocol):
         group_a: str,
         group_b: str,
         sample_key: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Compute pseudobulk or sample-aware condition DE."""
         ...
 
