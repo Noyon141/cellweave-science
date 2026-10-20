@@ -27,6 +27,50 @@ from cellweave_science.importers.security import (
 )
 
 
+def test_decompression_limits_validation() -> None:
+    """DecompressionLimits fails closed when supplied zero, negative, or invalid values."""
+    # Zero bytes limit
+    with pytest.raises(
+        ImporterSecurityError, match="max_uncompressed_bytes must be .* strictly greater than 0"
+    ):
+        DecompressionLimits(max_uncompressed_bytes=0, max_compression_ratio=10.0)
+
+    # Negative bytes limit
+    with pytest.raises(
+        ImporterSecurityError, match="max_uncompressed_bytes must be .* strictly greater than 0"
+    ):
+        DecompressionLimits(max_uncompressed_bytes=-100, max_compression_ratio=10.0)
+
+    # Zero ratio
+    with pytest.raises(
+        ImporterSecurityError, match="max_compression_ratio must be .* strictly greater than 0.0"
+    ):
+        DecompressionLimits(max_uncompressed_bytes=1024, max_compression_ratio=0.0)
+
+    # Negative ratio
+    with pytest.raises(
+        ImporterSecurityError, match="max_compression_ratio must be .* strictly greater than 0.0"
+    ):
+        DecompressionLimits(max_uncompressed_bytes=1024, max_compression_ratio=-5.0)
+
+
+def test_open_bounded_gzip_stream_requires_limits(tmp_path: Path) -> None:
+    """open_bounded_gzip_stream cannot be called without an explicit DecompressionLimits instance."""
+    target = tmp_path / "data.gz"
+    with gzip.open(target, "wb") as gz:
+        gz.write(b"data")
+
+    # Missing / None limits parameter
+    with pytest.raises(TypeError):
+        # Type error when limits argument is omitted completely
+        list(open_bounded_gzip_stream(target))  # type: ignore[call-arg]
+
+    with pytest.raises(
+        ImporterSecurityError, match="DecompressionLimits must be explicitly provided"
+    ):
+        list(open_bounded_gzip_stream(target, limits=None))  # type: ignore[arg-type]
+
+
 def test_hdf5_magic_byte_recognition() -> None:
     """Header starting with HDF5 magic bytes is identified as HDF5."""
     assert detect_physical_format(HDF5_MAGIC + b"extra_content") == PhysicalContainerFormat.HDF5
@@ -90,13 +134,14 @@ def test_genuine_gzipped_matrix_market(tmp_path: Path) -> None:
 
 
 def test_bounded_gzip_stream_safe_read(tmp_path: Path) -> None:
-    """Bounded gzip stream yields expected decompressed chunks."""
+    """Bounded gzip stream yields expected decompressed chunks when inside explicit limits."""
     target = tmp_path / "data.gz"
     data = b"CellWeave safe gzip testing chunk! " * 50
     with gzip.open(target, "wb") as gz:
         gz.write(data)
 
-    chunks = list(open_bounded_gzip_stream(target, chunk_size=64))
+    limits = DecompressionLimits(max_uncompressed_bytes=100000, max_compression_ratio=100.0)
+    chunks = list(open_bounded_gzip_stream(target, limits=limits, chunk_size=64))
     reconstructed = b"".join(chunks)
     assert reconstructed == data
 
@@ -108,7 +153,7 @@ def test_decompression_max_bytes_limit(tmp_path: Path) -> None:
     with gzip.open(target, "wb") as gz:
         gz.write(data)
 
-    limits = DecompressionLimits(max_uncompressed_bytes=200)
+    limits = DecompressionLimits(max_uncompressed_bytes=200, max_compression_ratio=50.0)
     with pytest.raises(
         DecompressionLimitError, match="Uncompressed size exceeded limit of 200 bytes"
     ):
@@ -124,7 +169,7 @@ def test_decompression_ratio_limit(tmp_path: Path) -> None:
     with gzip.open(target, "wb") as gz:
         gz.write(zeros)
 
-    limits = DecompressionLimits(max_compression_ratio=5.0)
+    limits = DecompressionLimits(max_uncompressed_bytes=50000, max_compression_ratio=5.0)
     with pytest.raises(DecompressionLimitError, match="Suspicious compression ratio"):
         for _ in open_bounded_gzip_stream(target, limits=limits, chunk_size=512):
             pass

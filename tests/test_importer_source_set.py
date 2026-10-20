@@ -250,6 +250,7 @@ def test_generic_matrix_invalid_cardinality_matrix(tmp_path: Path) -> None:
     f_feat2 = ImportSourceFile("f2", ImportFileRole.FEATURE_METADATA, tmp_path / "feat2.csv")
     f_prim = ImportSourceFile("p", ImportFileRole.PRIMARY, tmp_path / "p.h5ad")
     f_bar = ImportSourceFile("b", ImportFileRole.BARCODES, tmp_path / "b.tsv")
+    f_10x_feat = ImportSourceFile("f_10x", ImportFileRole.FEATURES, tmp_path / "features.tsv")
 
     # 0 MATRIX
     assert (
@@ -283,7 +284,7 @@ def test_generic_matrix_invalid_cardinality_matrix(tmp_path: Path) -> None:
         == ScientificIssueCode.INVALID_IMPORT_CARDINALITY
     )
 
-    # PRIMARY present
+    # PRIMARY present in GENERIC_MATRIX
     assert (
         validate_import_source_set_cardinality(
             ImportSourceSet(SourceFormat.GENERIC_MATRIX, (f_mat1, f_prim))
@@ -291,10 +292,17 @@ def test_generic_matrix_invalid_cardinality_matrix(tmp_path: Path) -> None:
         == ScientificIssueCode.INVALID_IMPORT_CARDINALITY
     )
 
-    # BARCODES present
+    # BARCODES present in GENERIC_MATRIX
     assert (
         validate_import_source_set_cardinality(
             ImportSourceSet(SourceFormat.GENERIC_MATRIX, (f_mat1, f_bar))
         )[0].code
         == ScientificIssueCode.INVALID_IMPORT_CARDINALITY
     )
+
+    # Explicit: FEATURES present in GENERIC_MATRIX (disallowed role)
+    issues_features = validate_import_source_set_cardinality(
+        ImportSourceSet(SourceFormat.GENERIC_MATRIX, (f_mat1, f_10x_feat))
+    )
+    assert len(issues_features) == 1
+    assert issues_features[0].code == ScientificIssueCode.INVALID_IMPORT_CARDINALITY
