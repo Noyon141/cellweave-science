@@ -162,11 +162,39 @@ def validate_canonical_anndata(
     validate_identifiers(adata.obs_names.tolist(), context="canonical obs_names")
     validate_identifiers(adata.var_names.tolist(), context="canonical var_names")
 
-    # Policy B hygiene checks: no layers['counts']
+    # Policy B hygiene checks: no layers, obsm, varm, obsp, varp, or raw
     if "counts" in adata.layers:
         raise CanonicalValidationError(
             "Canonical AnnData in Phase 3 must store raw counts strictly in X, not in layers['counts']"
         )
+
+    if len(adata.layers) > 0:
+        raise CanonicalValidationError(
+            f"Canonical AnnData in Phase 3 must not contain layers, found: {list(adata.layers.keys())}"
+        )
+
+    if len(adata.obsm) > 0:
+        raise CanonicalValidationError(
+            f"Canonical AnnData in Phase 3 must not contain obsm slots, found: {list(adata.obsm.keys())}"
+        )
+
+    if len(adata.varm) > 0:
+        raise CanonicalValidationError(
+            f"Canonical AnnData in Phase 3 must not contain varm slots, found: {list(adata.varm.keys())}"
+        )
+
+    if len(adata.obsp) > 0:
+        raise CanonicalValidationError(
+            f"Canonical AnnData in Phase 3 must not contain obsp slots, found: {list(adata.obsp.keys())}"
+        )
+
+    if len(adata.varp) > 0:
+        raise CanonicalValidationError(
+            f"Canonical AnnData in Phase 3 must not contain varp slots, found: {list(adata.varp.keys())}"
+        )
+
+    if adata.raw is not None:
+        raise CanonicalValidationError("Canonical AnnData in Phase 3 must not contain adata.raw")
 
     # Organism check
     stored_org = adata.uns.get("organism")

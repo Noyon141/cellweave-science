@@ -28,7 +28,8 @@ This repository **never**:
 
 ```
 cellweave_science/
-  importers/                # DatasetImporter protocol & format detectors
+  importers/                # DatasetImporter protocol, format detectors, & canonical publication
+  publication.py            # Capability-based immutable canonical artifact publication boundary
   validation/               # Stage 0 canonical dataset validation protocol
   qc/                       # QC metrics & doublet detection protocols
   normalization/            # Library-size normalization & HVG protocols

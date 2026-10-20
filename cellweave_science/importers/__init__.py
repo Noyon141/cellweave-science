@@ -20,6 +20,9 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from cellweave_science.contracts import (
+    CanonicalArtifactPublicationCapabilities,
+    CanonicalArtifactPublicationResult,
+    CanonicalArtifactPublicationStatus,
     CanonicalizationResult,
     GeneIdScheme,
     ImportFileRole,
@@ -53,6 +56,21 @@ from cellweave_science.importers.generic import (
     sniff_delimiter,
 )
 from cellweave_science.importers.h5ad import H5ADImporter
+from cellweave_science.importers.publication import (
+    CanonicalArtifactCapabilityExpiredError,
+    CanonicalArtifactIntegrityError,
+    CanonicalArtifactPublicationError,
+    CanonicalArtifactTransportError,
+    CanonicalPublicationTransport,
+    HttpsCapabilityTransport,
+    LocalFileStatSnapshot,
+    PutDisposition,
+    RemoteStreamVerification,
+    publish_canonical_artifact,
+    redact_capability_url,
+    validate_local_canonical_h5ad_file,
+    validate_publication_capabilities,
+)
 from cellweave_science.importers.security import (
     GZIP_MAGIC,
     HDF5_MAGIC,
@@ -125,6 +143,9 @@ class DatasetImporter(Protocol):
 
 __all__ = [
     # Contracts re-exports
+    "CanonicalArtifactPublicationCapabilities",
+    "CanonicalArtifactPublicationResult",
+    "CanonicalArtifactPublicationStatus",
     "ImportFileRole",
     "SourceFormat",
     # Protocols and sources
@@ -178,6 +199,20 @@ __all__ = [
     # Canonical builder & validator
     "build_canonical_anndata",
     "validate_canonical_anndata",
+    # Canonical publication
+    "CanonicalArtifactPublicationError",
+    "CanonicalArtifactCapabilityExpiredError",
+    "CanonicalArtifactIntegrityError",
+    "CanonicalArtifactTransportError",
+    "CanonicalPublicationTransport",
+    "HttpsCapabilityTransport",
+    "LocalFileStatSnapshot",
+    "PutDisposition",
+    "RemoteStreamVerification",
+    "publish_canonical_artifact",
+    "redact_capability_url",
+    "validate_local_canonical_h5ad_file",
+    "validate_publication_capabilities",
     # Errors
     "ImporterSecurityError",
     "DecompressionLimitError",
