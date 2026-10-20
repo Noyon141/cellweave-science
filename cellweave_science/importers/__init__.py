@@ -46,6 +46,12 @@ from cellweave_science.importers.errors import (
     ImporterSecurityError,
     MalformedCompressedStreamError,
 )
+from cellweave_science.importers.generic import (
+    GenericMatrixConfig,
+    GenericMatrixImporter,
+    read_delimited_table,
+    sniff_delimiter,
+)
 from cellweave_science.importers.h5ad import H5ADImporter
 from cellweave_science.importers.security import (
     GZIP_MAGIC,
@@ -126,6 +132,10 @@ __all__ = [
     "TenxH5Importer",
     "TenxMtxImporter",
     "TenxImporterConfig",
+    "GenericMatrixConfig",
+    "GenericMatrixImporter",
+    "read_delimited_table",
+    "sniff_delimiter",
     "TenxFeature",
     "GENE_EXPRESSION_MODALITY",
     "parse_10x_barcodes",
