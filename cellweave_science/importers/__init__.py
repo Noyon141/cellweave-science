@@ -65,9 +65,11 @@ from cellweave_science.importers.security import (
 from cellweave_science.importers.sources import ImportSourceFile, ImportSourceSet
 from cellweave_science.importers.validation import (
     CountClassification,
+    check_ensembl_species_conflict,
     classify_count_matrix,
     detect_ensembl_organism_candidates,
     ensure_csr_matrix,
+    has_opposing_ensembl_species,
     validate_count_matrix,
     validate_identifiers,
     validate_import_source_set_cardinality,
@@ -138,6 +140,8 @@ __all__ = [
     "ensure_csr_matrix",
     "validate_identifiers",
     "detect_ensembl_organism_candidates",
+    "check_ensembl_species_conflict",
+    "has_opposing_ensembl_species",
     "validate_import_source_set_cardinality",
     # Canonical builder & validator
     "build_canonical_anndata",

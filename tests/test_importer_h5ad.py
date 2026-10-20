@@ -41,6 +41,7 @@ from cellweave_science.contracts import (
     Organism,
     SampleMappingEntry,
     ScientificIssueCode,
+    ScientificIssueSeverity,
     SourceFormat,
 )
 from cellweave_science.importers.canonical import validate_canonical_anndata
@@ -656,3 +657,430 @@ def test_sparse_preservation(tmp_path: Path) -> None:
     c_adata = ad.read_h5ad(out_p)
     assert sp.isspmatrix_csr(c_adata.X)
     assert c_adata.X.nnz == 3
+
+
+# =========================================================================
+# ORGANISM RESOLUTION & STEP D REUSE REGRESSION MATRIX
+# =========================================================================
+
+
+def test_organism_100_percent_human_ensembl(tmp_path: Path) -> None:
+    """100% HUMAN Ensembl IDs with no metadata resolves to HUMAN."""
+    p = tmp_path / "human_100.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSG00000141510", "ENSG00000139618"])
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_h100", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.VALID
+    assert inspect_res.detectedOrganism == Organism.HUMAN
+    assert inspect_res.detectedGeneIdScheme == GeneIdScheme.ENSEMBL
+
+
+def test_organism_100_percent_mouse_ensembl(tmp_path: Path) -> None:
+    """100% MOUSE Ensembl IDs with no metadata resolves to MOUSE."""
+    p = tmp_path / "mouse_100.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSMUSG00000059552", "ENSMUSG00000001234"])
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_m100", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.VALID
+    assert inspect_res.detectedOrganism == Organism.MOUSE
+    assert inspect_res.detectedGeneIdScheme == GeneIdScheme.ENSEMBL
+
+
+def test_organism_80_percent_human_20_percent_symbols_unresolved(tmp_path: Path) -> None:
+    """80% HUMAN Ensembl + 20% symbols/random IDs DOES NOT resolve HUMAN (conservative Step D policy)."""
+    p = tmp_path / "human_80.h5ad"
+    # 4 Human Ensembl IDs (80%) + 1 gene symbol (20%)
+    x = sp.csr_matrix([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(
+        index=[
+            "ENSG00000141510",
+            "ENSG00000139618",
+            "ENSG00000157764",
+            "ENSG00000171862",
+            "UNRESOLVED_SYMBOL",
+        ]
+    )
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_h80", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    # Conservative policy requires 100% consistent Ensembl IDs with 0 non-Ensembl
+    assert inspect_res.detectedOrganism is None
+    assert inspect_res.status == InspectionStatus.NEEDS_MAPPING
+    assert inspect_res.requiresMapping is True
+
+
+def test_organism_80_percent_mouse_20_percent_symbols_unresolved(tmp_path: Path) -> None:
+    """80% MOUSE Ensembl + 20% symbols/random IDs DOES NOT resolve MOUSE (conservative Step D policy)."""
+    p = tmp_path / "mouse_80.h5ad"
+    # 4 Mouse Ensembl IDs (80%) + 1 gene symbol (20%)
+    x = sp.csr_matrix([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(
+        index=[
+            "ENSMUSG00000059552",
+            "ENSMUSG00000001234",
+            "ENSMUSG00000005678",
+            "ENSMUSG00000009999",
+            "ACTB",
+        ]
+    )
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_m80", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.detectedOrganism is None
+    assert inspect_res.status == InspectionStatus.NEEDS_MAPPING
+    assert inspect_res.requiresMapping is True
+
+
+def test_organism_mixed_human_mouse_ensembl_conflict(tmp_path: Path) -> None:
+    """Mixture of Human (ENSG) and Mouse (ENSMUSG) IDs is a conflict and marks dataset INVALID."""
+    p = tmp_path / "mixed_species.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSG00000141510", "ENSMUSG00000059552"])
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_mixed", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.INVALID
+    assert any(
+        iss.code == ScientificIssueCode.UNRESOLVED_SPECIES
+        and iss.severity == ScientificIssueSeverity.ERROR
+        for iss in inspect_res.issues
+    )
+
+
+def test_organism_symbols_only_no_metadata_needs_mapping(tmp_path: Path) -> None:
+    """Symbol-only dataset without explicit metadata flags NEEDS_MAPPING."""
+    p = tmp_path / "symbols_only.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["TP53", "BRCA1"])
+    adata = ad.AnnData(X=x, obs=obs, var=var)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_sym", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.detectedOrganism is None
+    assert inspect_res.status == InspectionStatus.NEEDS_MAPPING
+    assert inspect_res.requiresMapping is True
+
+
+def test_organism_symbols_only_exact_human_metadata(tmp_path: Path) -> None:
+    """Symbol-only dataset with exact 'Homo sapiens' metadata resolves to HUMAN."""
+    p = tmp_path / "symbols_human.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["TP53", "BRCA1"])
+    adata = ad.AnnData(X=x, obs=obs, var=var, uns={"organism": "Homo sapiens"})
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_sym_h", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.VALID
+    assert inspect_res.detectedOrganism == Organism.HUMAN
+
+
+def test_organism_symbols_only_exact_mouse_metadata(tmp_path: Path) -> None:
+    """Symbol-only dataset with exact 'Mus musculus' metadata resolves to MOUSE."""
+    p = tmp_path / "symbols_mouse.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["Trp53", "Actb"])
+    adata = ad.AnnData(X=x, obs=obs, var=var, uns={"organism": "Mus musculus"})
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_sym_m", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.VALID
+    assert inspect_res.detectedOrganism == Organism.MOUSE
+
+
+def test_organism_explicit_human_conflicts_with_mouse_ensembl(tmp_path: Path) -> None:
+    """Explicit HUMAN metadata with MOUSE Ensembl IDs is a conflict (INVALID)."""
+    p = tmp_path / "conflict_h_m.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSMUSG00000059552", "ENSMUSG00000001234"])
+    adata = ad.AnnData(X=x, obs=obs, var=var, uns={"organism": "HUMAN"})
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_conf_hm", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.INVALID
+    assert any(
+        iss.code == ScientificIssueCode.UNRESOLVED_SPECIES
+        and iss.severity == ScientificIssueSeverity.ERROR
+        for iss in inspect_res.issues
+    )
+
+
+def test_organism_explicit_mouse_conflicts_with_human_ensembl(tmp_path: Path) -> None:
+    """Explicit MOUSE metadata with HUMAN Ensembl IDs is a conflict (INVALID)."""
+    p = tmp_path / "conflict_m_h.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSG00000141510", "ENSG00000139618"])
+    adata = ad.AnnData(X=x, obs=obs, var=var, uns={"organism": "mouse"})
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_conf_mh", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.INVALID
+    assert any(
+        iss.code == ScientificIssueCode.UNRESOLVED_SPECIES
+        and iss.severity == ScientificIssueSeverity.ERROR
+        for iss in inspect_res.issues
+    )
+
+
+def test_organism_explicit_unsupported_species_rejected(tmp_path: Path) -> None:
+    """Explicit unsupported species in metadata raises UNSUPPORTED_SPECIES."""
+    p = tmp_path / "unsupported_species.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["g1", "g2"])
+    adata = ad.AnnData(X=x, obs=obs, var=var, uns={"species": "Danio rerio"})
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_unsupp", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.INVALID
+    assert any(iss.code == ScientificIssueCode.UNSUPPORTED_SPECIES for iss in inspect_res.issues)
+
+
+@pytest.mark.parametrize(
+    "invalid_val",
+    [
+        "humanized mouse",
+        "mouse-like",
+        "Homo sapiens sample",
+        "mixed human/mouse",
+        "rat",
+    ],
+)
+def test_organism_metadata_fuzzy_substring_values_rejected(
+    tmp_path: Path, invalid_val: str
+) -> None:
+    """Values with substrings of human/mouse do NOT resolve silently (no fuzzy matching)."""
+    p = tmp_path / f"fuzzy_{abs(hash(invalid_val))}.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["g1", "g2"])
+    adata = ad.AnnData(X=x, obs=obs, var=var, uns={"organism": invalid_val})
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_fuzz", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    inspect_res = importer.inspect(source_set)
+    assert inspect_res.status == InspectionStatus.INVALID
+    assert any(iss.code == ScientificIssueCode.UNSUPPORTED_SPECIES for iss in inspect_res.issues)
+
+
+def test_organism_metadata_taxonomy_ids(tmp_path: Path) -> None:
+    """Exact taxonomy IDs '9606' and '10090' resolve cleanly without substring ambiguity."""
+    p_h = tmp_path / "tax_9606.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["g1", "g2"])
+    ad.AnnData(X=x, obs=obs, var=var, uns={"taxon_id": "9606"}).write_h5ad(p_h)
+
+    importer = H5ADImporter()
+    res_h = importer.inspect(
+        ImportSourceSet(SourceFormat.H5AD, (ImportSourceFile("f1", ImportFileRole.PRIMARY, p_h),))
+    )
+    assert res_h.detectedOrganism == Organism.HUMAN
+
+    p_m = tmp_path / "tax_10090.h5ad"
+    ad.AnnData(X=x, obs=obs, var=var, uns={"taxon_id": 10090}).write_h5ad(p_m)
+    res_m = importer.inspect(
+        ImportSourceSet(SourceFormat.H5AD, (ImportSourceFile("f2", ImportFileRole.PRIMARY, p_m),))
+    )
+    assert res_m.detectedOrganism == Organism.MOUSE
+
+
+# =========================================================================
+# RAW COUNT AMBIGUITY REGRESSION TESTS
+# =========================================================================
+
+
+def test_ambiguous_floating_x_rejected(tmp_path: Path) -> None:
+    """Near-integral floating X (within machine epsilon) produces AMBIGUOUS_COUNT_SEMANTICS."""
+    p = tmp_path / "ambig_x.h5ad"
+    # 10.0 + 1e-15 is classified as AMBIGUOUS by Step D classify_count_matrix
+    ambig_mat = np.array([[10.0 + 1e-15, 20.0], [30.0, 40.0]], dtype=np.float64)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSG1", "ENSG2"])
+    adata = ad.AnnData(X=ambig_mat, obs=obs, var=var)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_ambig_x", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    issues = importer.validate(source_set)
+    assert len(issues) == 1
+    assert issues[0].code == ScientificIssueCode.AMBIGUOUS_COUNT_SEMANTICS
+
+
+def test_ambiguous_counts_layer_rejected(tmp_path: Path) -> None:
+    """Near-integral floating layers['counts'] produces AMBIGUOUS_COUNT_SEMANTICS."""
+    p = tmp_path / "ambig_layer.h5ad"
+    x_norm = np.array([[1.5, 2.5], [3.5, 4.5]], dtype=np.float32)
+    ambig_mat = np.array([[10.0 + 1e-15, 20.0], [30.0, 40.0]], dtype=np.float64)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSG1", "ENSG2"])
+    adata = ad.AnnData(X=x_norm, obs=obs, var=var, layers={"counts": ambig_mat})
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_ambig_l", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    issues = importer.validate(source_set)
+    assert len(issues) == 1
+    assert issues[0].code == ScientificIssueCode.AMBIGUOUS_COUNT_SEMANTICS
+
+
+def test_ambiguous_raw_x_rejected(tmp_path: Path) -> None:
+    """Near-integral floating raw.X produces AMBIGUOUS_COUNT_SEMANTICS without silent bypass."""
+    p = tmp_path / "ambig_raw.h5ad"
+    x_norm = np.array([[1.5, 2.5], [3.5, 4.5]], dtype=np.float32)
+    ambig_mat = np.array([[10.0 + 1e-15, 20.0], [30.0, 40.0]], dtype=np.float64)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSG1", "ENSG2"])
+
+    raw_adata = ad.AnnData(X=ambig_mat, obs=obs, var=var)
+    adata = ad.AnnData(X=x_norm, obs=obs, var=var)
+    adata.raw = raw_adata
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_ambig_raw", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    issues = importer.validate(source_set)
+    assert len(issues) == 1
+    assert issues[0].code == ScientificIssueCode.AMBIGUOUS_COUNT_SEMANTICS
+
+
+# =========================================================================
+# CANONICAL UNS PROVENANCE AUDIT TEST
+# =========================================================================
+
+
+def test_canonical_uns_audit(tmp_path: Path) -> None:
+    """Verifies that canonical uns contains ONLY approved scientific metadata.
+
+    Invariants:
+    1. adata.uns contains ONLY 'organism', 'gene_id_scheme', and 'reference_build'.
+    2. 'cellweave' dictionary is NOT present in uns (source SHA authority belongs to persistence).
+    3. Source uns analysis metadata is NOT copied wholesale.
+    """
+    p = tmp_path / "source_uns.h5ad"
+    x = sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32)
+    obs = pd.DataFrame(index=["c1", "c2"])
+    var = pd.DataFrame(index=["ENSG1", "ENSG2"])
+    # Source has extensive analysis metadata
+    source_uns = {
+        "pca": {"variance": [1.0, 0.5]},
+        "neighbors": {"connectivities": "dummy"},
+        "source_checksum": "fake_checksum",
+        "unapproved_key": 12345,
+    }
+    adata = ad.AnnData(X=x, obs=obs, var=var, uns=source_uns)
+    adata.write_h5ad(p)
+
+    source_set = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_uns", ImportFileRole.PRIMARY, p),),
+    )
+    importer = H5ADImporter()
+    out_p = tmp_path / "canonical_clean_uns.h5ad"
+    importer.canonicalize(
+        source_set=source_set,
+        output_path=str(out_p),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        reference_build="GRCh38",
+    )
+
+    c_adata = ad.read_h5ad(out_p)
+    # 1. Check exact allowed keys
+    assert set(c_adata.uns.keys()) == {"organism", "gene_id_scheme", "reference_build"}
+    assert c_adata.uns["organism"] == "HUMAN"
+    assert c_adata.uns["gene_id_scheme"] == "ENSEMBL"
+    assert c_adata.uns["reference_build"] == "GRCh38"
+
+    # 2. Check that no unapproved or source keys survived
+    assert "cellweave" not in c_adata.uns
+    assert "source_checksum" not in c_adata.uns
+    assert "pca" not in c_adata.uns
+    assert "neighbors" not in c_adata.uns
+    assert "unapproved_key" not in c_adata.uns

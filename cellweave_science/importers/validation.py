@@ -256,6 +256,34 @@ def detect_ensembl_organism_candidates(identifiers: Sequence[str]) -> Organism |
     return None
 
 
+def check_ensembl_species_conflict(identifiers: Sequence[str]) -> bool:
+    """Check if both Human (ENSG) and Mouse (ENSMUSG) Ensembl identifiers coexist.
+
+    Returns True if both Human and Mouse Ensembl IDs are present (conflicting mixture).
+    """
+    has_human = False
+    has_mouse = False
+    for gid in identifiers:
+        s = str(gid).strip()
+        if _ENS_HUMAN_PATTERN.match(s):
+            has_human = True
+        elif _ENS_MOUSE_PATTERN.match(s):
+            has_mouse = True
+        if has_human and has_mouse:
+            return True
+    return False
+
+
+def has_opposing_ensembl_species(identifiers: Sequence[str], organism: Organism) -> bool:
+    """Check if identifiers contain Ensembl IDs of an opposing species.
+
+    For HUMAN: returns True if any Mouse Ensembl IDs (ENSMUSG...) are found.
+    For MOUSE: returns True if any Human Ensembl IDs (ENSG...) are found.
+    """
+    opposing_pattern = _ENS_MOUSE_PATTERN if organism == Organism.HUMAN else _ENS_HUMAN_PATTERN
+    return any(opposing_pattern.match(str(gid).strip()) for gid in identifiers)
+
+
 def validate_import_source_set_cardinality(source_set: ImportSourceSet) -> list[ScientificIssue]:
     """Validate that the given ImportSourceSet structurally satisfies Phase 3 role cardinality rules.
 
@@ -334,5 +362,7 @@ __all__ = [
     "ensure_csr_matrix",
     "validate_identifiers",
     "detect_ensembl_organism_candidates",
+    "check_ensembl_species_conflict",
+    "has_opposing_ensembl_species",
     "validate_import_source_set_cardinality",
 ]

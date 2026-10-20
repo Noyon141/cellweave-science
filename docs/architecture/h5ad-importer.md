@@ -35,14 +35,18 @@
 2. Computes dataset dimensions (`cellCountEstimate`, `geneCountEstimate`).
 3. Enumerates available column names in `obs` and `var`.
 4. Detects gene identifier scheme:
-   - Identifies Ensembl candidate fraction (>= 80% matches `ENSG` or `ENSMUSG`).
-   - Distinguishes Human vs Mouse Ensembl IDs.
+   - Uses conservative Step D `detect_ensembl_organism_candidates` requiring 100% consistent Ensembl IDs with 0 non-Ensembl and 0 opposing species IDs (no arbitrary percentage threshold).
+   - Distinguishes Human (`ENSG...`) vs Mouse (`ENSMUSG...`) Ensembl IDs.
    - Detects gene symbols when stable IDs are not Ensembl.
 5. Resolves organism:
-   - Inspects explicit metadata in `uns` (`organism`, `species`, `taxon_id`).
-   - Inspects Ensembl prefixes in feature identifiers.
-   - Validates agreement between explicit metadata and Ensembl prefixes; rejects conflicts with `UNRESOLVED_SPECIES`.
-   - If species cannot be conclusively resolved without ambiguity, sets `detectedOrganism=None` and returns `InspectionStatus.NEEDS_MAPPING` with `requiresMapping=True`.
+   - Inspects explicit metadata in `uns` (`organism`, `species`, `taxon_id`) using exact normalized values (no fuzzy substring matching).
+     - Accepted Human: `"human"`, `"homo sapiens"`, `"homo_sapiens"`, `"9606"`.
+     - Accepted Mouse: `"mouse"`, `"mus musculus"`, `"mus_musculus"`, `"10090"`.
+     - Explicit unsupported values (e.g. `"danio rerio"`, `"rat"`, `"humanized mouse"`, `"mouse-like"`) reject with `UNSUPPORTED_SPECIES`.
+   - Uses Step D helpers (`check_ensembl_species_conflict`, `has_opposing_ensembl_species`) to enforce consistent Ensembl ID evidence.
+   - Rejects mixtures of Human and Mouse Ensembl IDs with `UNRESOLVED_SPECIES` (`ERROR`).
+   - Rejects conflicts between explicit metadata and opposing Ensembl IDs with `UNRESOLVED_SPECIES` (`ERROR`).
+   - If species cannot be conclusively resolved without ambiguity (e.g. symbol-only with no metadata, or 80% Ensembl + 20% symbols), sets `detectedOrganism=None` and returns `InspectionStatus.NEEDS_MAPPING` with `requiresMapping=True`.
 6. Inspects reference build from `uns` (`reference_build`, `genome`, `reference_genome`, `assembly`).
 
 ### D. `canonicalize(...) -> CanonicalizationResult`
@@ -60,9 +64,14 @@
 6. Builds new canonical AnnData via `build_canonical_anndata`:
    - Enforces Policy B: `X` has raw counts, `layers` does not contain redundant raw counts.
    - Slot sanitization: omits unvetted `obsm`, `varm`, `obsp`, `varp`.
-   - Records essential provenance metadata in `uns["cellweave"]` (schema version, source format, organism, gene ID scheme, timestamps, checksums).
+   - Canonical `uns` schema stores strictly approved scientific metadata:
+     - `organism` (authoritative scientific field)
+     - `gene_id_scheme` (authoritative scientific field)
+     - `reference_build` (authoritative scientific field, if present)
+   - Source file SHA-256 is NOT embedded in `uns["cellweave"]` (source checksum authority belongs to persistence).
+   - Source `uns` analysis metadata is NOT copied wholesale.
 7. Validates canonical AnnData with `validate_canonical_anndata`.
-8. Writes atomic `.h5ad` artifact to destination path and returns `CanonicalizationResult` with file SHA-256 and byte size.
+8. Writes atomic `.h5ad` artifact to destination path and returns `CanonicalizationResult` with canonical artifact SHA-256 and byte size.
 
 ---
 

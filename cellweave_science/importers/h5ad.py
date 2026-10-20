@@ -49,15 +49,48 @@ from cellweave_science.importers.security import (
 from cellweave_science.importers.sources import ImportSourceSet
 from cellweave_science.importers.validation import (
     CountClassification,
+    check_ensembl_species_conflict,
     classify_count_matrix,
     detect_ensembl_organism_candidates,
     ensure_csr_matrix,
+    has_opposing_ensembl_species,
     validate_identifiers,
     validate_import_source_set_cardinality,
 )
 
 # Recognized explicit organism uns keys (case-insensitive audit)
 _EXPLICIT_ORGANISM_KEYS = ("organism", "species", "taxon_id")
+
+# Exact normalized metadata values for organism identification (no fuzzy matching)
+_ACCEPTED_HUMAN_METADATA_VALUES = frozenset(
+    {
+        "human",
+        "homo sapiens",
+        "homo_sapiens",
+        "9606",
+    }
+)
+
+_ACCEPTED_MOUSE_METADATA_VALUES = frozenset(
+    {
+        "mouse",
+        "mus musculus",
+        "mus_musculus",
+        "10090",
+    }
+)
+
+_UNSPECIFIED_METADATA_VALUES = frozenset(
+    {
+        "",
+        "unknown",
+        "unspecified",
+        "na",
+        "n/a",
+        "none",
+        "null",
+    }
+)
 
 # Recognized explicit stable gene identifier column candidates in var
 _CANDIDATE_STABLE_ID_COLUMNS = ("gene_ids", "gene_id", "ensembl_id", "ensembl")
@@ -326,6 +359,18 @@ class H5ADImporter:
         canonical_var_names = feature_res["canonical_var_names"]
         gene_symbols = feature_res["gene_symbols"]
 
+        # Verify confirmed organism does not conflict with Ensembl ID evidence
+        if check_ensembl_species_conflict(canonical_var_names):
+            raise ImporterSecurityError(
+                "Cannot canonicalize dataset containing conflicting Human and Mouse Ensembl IDs",
+                issue_code=ScientificIssueCode.UNRESOLVED_SPECIES,
+            )
+        if has_opposing_ensembl_species(canonical_var_names, organism):
+            raise ImporterSecurityError(
+                f"Cannot canonicalize dataset: specified organism {organism.value} conflicts with opposing Ensembl IDs",
+                issue_code=ScientificIssueCode.UNRESOLVED_SPECIES,
+            )
+
         # Build clean canonical var DataFrame
         canonical_var = pd.DataFrame(index=canonical_var_names)
         canonical_var["source_feature_id"] = adata.var_names.tolist()
@@ -499,7 +544,13 @@ class H5ADImporter:
         cur_var_names = list(adata.var_names)
 
         raw_mat = raw.X
-        if classify_count_matrix(raw_mat) != CountClassification.VALID_COUNTS:
+        raw_classification = classify_count_matrix(raw_mat)
+        if raw_classification == CountClassification.AMBIGUOUS:
+            raise CountValidationError(
+                "adata.raw.X expression values are near-integral but ambiguous; raw counts cannot be verified",
+                issue_code=ScientificIssueCode.AMBIGUOUS_COUNT_SEMANTICS,
+            )
+        if raw_classification != CountClassification.VALID_COUNTS:
             return None
 
         raw_csr = ensure_csr_matrix(raw_mat)
@@ -603,28 +654,40 @@ class H5ADImporter:
     def _resolve_organism(
         self, adata: ad.AnnData, canonical_var_names: list[str]
     ) -> dict[str, Any]:
-        """Determine organism from explicit metadata and Ensembl gene identifiers."""
+        """Determine organism from explicit metadata and Ensembl gene identifiers using Step D policy."""
+        # 1. First check if gene identifiers themselves contain a conflicting mixture of species
+        if check_ensembl_species_conflict(canonical_var_names):
+            return {
+                "organism": None,
+                "issue": ScientificIssue(
+                    code=ScientificIssueCode.UNRESOLVED_SPECIES,
+                    severity=ScientificIssueSeverity.ERROR,
+                    message="Conflicting Ensembl identifiers: dataset contains both Human (ENSG) and Mouse (ENSMUSG) gene IDs",
+                    userActionRequired=True,
+                ),
+            }
+
+        # 2. Check explicit uns metadata against narrow accepted values (no substring matching)
         explicit_org: Organism | None = None
         has_unsupported_org = False
         unsupported_org_val = ""
 
-        # Check explicit uns metadata
         if adata.uns is not None:
             for k in _EXPLICIT_ORGANISM_KEYS:
                 if k in adata.uns:
-                    val = str(adata.uns[k]).strip().upper()
-                    if val in ("HUMAN", "HOMO SAPIENS", "HOMO_SAPIENS", "HSA", "9606"):
+                    raw_val = str(adata.uns[k]).strip()
+                    norm_val = raw_val.lower()
+                    if norm_val in _ACCEPTED_HUMAN_METADATA_VALUES:
                         explicit_org = Organism.HUMAN
                         break
-                    if val in ("MOUSE", "MUS MUSCULUS", "MUS_MUSCULUS", "MMU", "10090"):
+                    if norm_val in _ACCEPTED_MOUSE_METADATA_VALUES:
                         explicit_org = Organism.MOUSE
                         break
+                    if norm_val in _UNSPECIFIED_METADATA_VALUES:
+                        continue
                     has_unsupported_org = True
-                    unsupported_org_val = val
+                    unsupported_org_val = raw_val
                     break
-
-        # Check deterministic Ensembl ID evidence
-        id_candidate = detect_ensembl_organism_candidates(canonical_var_names)
 
         if has_unsupported_org:
             return {
@@ -637,17 +700,24 @@ class H5ADImporter:
                 ),
             }
 
-        if explicit_org is not None and id_candidate is not None and explicit_org != id_candidate:
+        # 3. Check for conflict between explicit metadata and opposing Ensembl IDs
+        if explicit_org is not None and has_opposing_ensembl_species(
+            canonical_var_names, explicit_org
+        ):
             return {
                 "organism": None,
                 "issue": ScientificIssue(
                     code=ScientificIssueCode.UNRESOLVED_SPECIES,
                     severity=ScientificIssueSeverity.ERROR,
-                    message=f"Organism metadata ({explicit_org.value}) conflicts with gene ID evidence ({id_candidate.value})",
+                    message=f"Organism metadata ({explicit_org.value}) conflicts with opposing Ensembl gene identifiers",
                     userActionRequired=True,
                 ),
             }
 
+        # 4. Step D conservative Ensembl candidate detection (requires 100% consistent IDs)
+        id_candidate = detect_ensembl_organism_candidates(canonical_var_names)
+
+        # 5. Resolve detected organism
         detected_org = explicit_org or id_candidate
 
         if detected_org is None:
