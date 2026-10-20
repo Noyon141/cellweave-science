@@ -78,6 +78,7 @@ from cellweave_science.importers.tenx_shared import (
     parse_10x_barcodes,
     parse_10x_features_tsv,
     parse_10x_matrix_market,
+    parse_matrix_market,
     validate_10x_features,
 )
 from cellweave_science.importers.validation import (
@@ -142,6 +143,7 @@ __all__ = [
     "parse_10x_features_tsv",
     "validate_10x_features",
     "parse_10x_matrix_market",
+    "parse_matrix_market",
     "ImportSourceFile",
     "ImportSourceSet",
     # Checksum primitives

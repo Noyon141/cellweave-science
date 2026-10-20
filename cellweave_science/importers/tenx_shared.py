@@ -420,6 +420,8 @@ def parse_10x_matrix_market(
     return n_rows, n_cols, n_entries, coo
 
 
+parse_matrix_market = parse_10x_matrix_market
+
 __all__ = [
     "GENE_EXPRESSION_MODALITY",
     "TenxImporterConfig",
@@ -429,4 +431,5 @@ __all__ = [
     "parse_10x_features_tsv",
     "validate_10x_features",
     "parse_10x_matrix_market",
+    "parse_matrix_market",
 ]

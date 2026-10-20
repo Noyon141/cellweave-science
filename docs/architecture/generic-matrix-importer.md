@@ -29,12 +29,24 @@
 ## 3. Matrix Identity Model & Orientation Authority
 Orientation is **never** guessed from dimension heuristics, filenames, or identifier patterns.
 
-| Orientation | Cell Identity Authority | Feature Identity Authority | Transpose Behavior |
-| :--- | :--- | :--- | :--- |
-| **`CELLS_BY_GENES`** | CSV/TSV: Row labels (column 0 or `mapping.cellIdColumn`).<br>MTX: Rows ($1 \dots M$) mapped to `CELL_METADATA`. | CSV/TSV: Column headers ($1 \dots N$).<br>MTX: Columns ($1 \dots N$) mapped to `FEATURE_METADATA`. | None (source is already cells $\times$ genes). |
-| **`GENES_BY_CELLS`** | CSV/TSV: Column headers ($1 \dots N$).<br>MTX: Columns ($1 \dots N$) mapped to `CELL_METADATA`. | CSV/TSV: Row labels (column 0 or `mapping.geneIdColumn`).<br>MTX: Rows ($1 \dots M$) mapped to `FEATURE_METADATA`. | Explicit transpose: $(genes \times cells) \to (cells \times genes)$ via SciPy CSR `.T`. |
+| Source Type | Source Cell Identity Authority | Source Feature Identity Authority | Metadata Join Key | Canonical `obs_names` Source | Canonical `var_names` Source |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **CSV/TSV `CELLS_BY_GENES`** | Explicit matrix column (`mapping.cellIdColumn` or named column 0 verified by `_has_authoritative_row_id_column`) | Raw file column headers (columns $1 \dots N$, verified free of blanks, duplicates, and `Unnamed:` placeholders) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column matching source feature headers | Validated source cell IDs from matrix row-ID column | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else validated matrix column headers |
+| **CSV/TSV `GENES_BY_CELLS`** | Raw file column headers (columns $1 \dots N$, verified free of blanks, duplicates, and `Unnamed:` placeholders) | Explicit matrix column (`mapping.geneIdColumn` or named column 0 verified by `_has_authoritative_row_id_column`) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column matching source feature row IDs | Validated source cell IDs from matrix column headers | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else validated matrix row-ID column |
+| **MTX `CELLS_BY_GENES`** | `CELL_METADATA` explicit column (`mapping.cellIdColumn` or column 0; mandatory) | `FEATURE_METADATA` source feature column (column 0; mandatory) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column 0 | Validated cell IDs from `CELL_METADATA` | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else `FEATURE_METADATA` column 0 |
+| **MTX `GENES_BY_CELLS`** | `CELL_METADATA` explicit column (`mapping.cellIdColumn` or column 0; mandatory) | `FEATURE_METADATA` source feature column (column 0; mandatory) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column 0 | Validated cell IDs from `CELL_METADATA` | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else `FEATURE_METADATA` column 0 |
 
-- **Prohibition on Fabricated IDs**: Fallback synthetic identifiers (`cell_1`, `row_1`, `col_1`, or integer ordinal sequences) are strictly prohibited unless those literal strings were the authoritative input values.
+- **Prohibition on RangeIndex & Fabricated IDs**:
+  - `read_delimited_table()` reads with `index_col=False`, leaving `df.index` as a default `pd.RangeIndex`.
+  - `df.index` is **never** used as biological cell or feature identities.
+  - Explicit guard `_guard_against_generated_positional_index()` rejects `pd.RangeIndex` or integer positional indices (`MISSING_REQUIRED_METADATA`).
+  - Fallback synthetic identifiers (`"0"`, `"1"`, `cell_1`, `row_1`, `feature_1`, or `Unnamed: 0`) are strictly prohibited unless those literal strings were the authoritative source values in a named identifier column.
+- **CSV/TSV Header Authority**:
+  - Raw header tokens are inspected directly from the stream before Pandas duplicate mangling (`g1` $\to$ `g1.1`) or placeholder generation (`Unnamed: k`).
+  - Blank headers, `Unnamed:` placeholders, or duplicate raw column headers fail closed.
+- **Generic MTX vs 10x Separation**:
+  - Generic Matrix Market files contain only numeric coordinate triplets and dimensions.
+  - `GENERIC_MATRIX` never assumes 10x barcode formats, 10x `features.tsv` column positions, or default `GENES_BY_CELLS` orientation. Both `CELL_METADATA` and `FEATURE_METADATA` are mandatory for generic MTX canonicalization.
 - **Inspection Invariant**: Because orientation cannot be assumed, `inspect()` reports `InspectionStatus.NEEDS_MAPPING` with `requiresMapping=True` and `ScientificIssueCode.AMBIGUOUS_ORIENTATION` until explicitly confirmed by the user.
 
 ---

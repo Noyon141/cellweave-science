@@ -67,7 +67,7 @@ from cellweave_science.importers.security import (
 )
 from cellweave_science.importers.sources import ImportSourceSet
 from cellweave_science.importers.tenx_shared import (
-    parse_10x_matrix_market,
+    parse_matrix_market,
     stream_text_lines,
 )
 from cellweave_science.importers.validation import (
@@ -189,6 +189,51 @@ def read_delimited_table(
     return df, delim
 
 
+def _read_raw_header_tokens(file_path: Path, delim: str, limits: DecompressionLimits) -> list[str]:
+    """Read raw header tokens from the first non-empty, non-comment line before Pandas mangling."""
+    for raw_line in stream_text_lines(file_path, limits=limits):
+        line = raw_line.strip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#") or line.lstrip().startswith("%"):
+            continue
+        return [tok.strip() for tok in line.split(delim)]
+    return []
+
+
+def _guard_against_generated_positional_index(index: pd.Index, context: str) -> None:
+    """Explicit internal guard forbidding Pandas-generated RangeIndex or integer positional indices
+    from ever becoming canonical biological cell or feature identities.
+    """
+    if isinstance(index, pd.RangeIndex) or index.inferred_type == "integer":
+        raise ImporterSecurityError(
+            f"Generated positional index ({type(index).__name__}) cannot be used as canonical {context}",
+            issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+        )
+
+
+def _is_unnamed_placeholder_header(col_name: object) -> bool:
+    """Return True if a column label is empty or a Pandas-generated 'Unnamed:' placeholder."""
+    s = str(col_name).strip()
+    return not s or s.startswith("Unnamed:")
+
+
+def _has_authoritative_row_id_column(df: pd.DataFrame, raw_headers: list[str]) -> bool:
+    """Verify whether column 0 of a delimited matrix table represents an authoritative source row ID column
+    rather than pure numeric expression counts (which would cause rows to only have a RangeIndex).
+    """
+    if df.empty or len(df.columns) < 2 or len(raw_headers) < 2:
+        return False
+    first_hdr = raw_headers[0]
+    if _is_unnamed_placeholder_header(first_hdr):
+        return False
+    # If the header token itself is numeric and every value in column 0 is numeric,
+    # the table is a headerless/pure-numeric expression matrix lacking a row ID column.
+    first_col_series = df.iloc[:, 0].astype(str).str.strip()
+    all_first_col_numeric = bool(pd.to_numeric(first_col_series, errors="coerce").notna().all())
+    if all_first_col_numeric:
+        return False
+    return True
+
+
 class GenericMatrixImporter:
     """Importer for generic expression matrices (CSV, TSV, MTX) conforming to Policy B."""
 
@@ -299,7 +344,7 @@ class GenericMatrixImporter:
 
         if matrix_kind == "MTX":
             try:
-                _n_rows, _n_cols, _n_entries, _coo = parse_10x_matrix_market(
+                _n_rows, _n_cols, _n_entries, _coo = parse_matrix_market(
                     matrix_path, limits=self.config.decompression_limits
                 )
             except DecompressionLimitError as exc:
@@ -338,6 +383,9 @@ class GenericMatrixImporter:
                     limits=self.config.decompression_limits,
                     expected_delim=delim,
                 )
+                raw_header_tokens = _read_raw_header_tokens(
+                    matrix_path, delim=delim, limits=self.config.decompression_limits
+                )
             except DecompressionLimitError as exc:
                 return [
                     ScientificIssue(
@@ -366,7 +414,7 @@ class GenericMatrixImporter:
                     )
                 ]
 
-            if len(df.columns) < 2:
+            if len(df.columns) < 2 or len(raw_header_tokens) < 2:
                 return [
                     ScientificIssue(
                         code=ScientificIssueCode.MALFORMED_INPUT,
@@ -376,39 +424,56 @@ class GenericMatrixImporter:
                     )
                 ]
 
-            # Check duplicate row identifiers (column 0)
-            raw_row_ids = df.iloc[:, 0].astype(str).tolist()
-            if len(raw_row_ids) != len(set(raw_row_ids)):
+            # Validate column header tokens (columns 1..N): reject blank or Pandas Unnamed placeholders
+            raw_col_tokens = raw_header_tokens[1:]
+            if any(_is_unnamed_placeholder_header(tok) for tok in raw_col_tokens) or any(
+                _is_unnamed_placeholder_header(col) for col in df.columns[1:]
+            ):
                 return [
                     ScientificIssue(
-                        code=ScientificIssueCode.DUPLICATE_CELL_IDS,
+                        code=ScientificIssueCode.MALFORMED_INPUT,
                         severity=ScientificIssueSeverity.ERROR,
-                        message=f"Duplicate identifiers found in row index column of {matrix_path.name}",
+                        message=(
+                            f"Column header of {matrix_path.name} contains blank or 'Unnamed:' "
+                            "placeholder identifiers"
+                        ),
                         userActionRequired=True,
                     )
                 ]
 
             # Check duplicate column identifiers in raw header (before pandas mangles them)
-            for raw_line in stream_text_lines(matrix_path, limits=self.config.decompression_limits):
-                line = raw_line.strip()
-                if not line or line.startswith("#") or line.startswith("%"):
-                    continue
-                header_tokens = [h.strip() for h in line.split(delim)]
-                if len(header_tokens) > 1:
-                    raw_feature_tokens = header_tokens[1:]
-                    if len(raw_feature_tokens) != len(set(raw_feature_tokens)):
-                        return [
-                            ScientificIssue(
-                                code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
-                                severity=ScientificIssueSeverity.ERROR,
-                                message=f"Duplicate identifiers found in column header of {matrix_path.name}",
-                                userActionRequired=True,
-                            )
-                        ]
-                break
+            if len(raw_col_tokens) != len(set(raw_col_tokens)):
+                return [
+                    ScientificIssue(
+                        code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
+                        severity=ScientificIssueSeverity.ERROR,
+                        message=f"Duplicate identifiers found in column header of {matrix_path.name}",
+                        userActionRequired=True,
+                    )
+                ]
 
-            # Validate numeric expression body (columns 1..N)
-            expr_df = df.iloc[:, 1:]
+            has_row_id_col = _has_authoritative_row_id_column(df, raw_header_tokens)
+            if has_row_id_col:
+                # Check duplicate row identifiers (column 0)
+                raw_row_ids = df.iloc[:, 0].astype(str).tolist()
+                if len(raw_row_ids) != len(set(raw_row_ids)):
+                    return [
+                        ScientificIssue(
+                            code=ScientificIssueCode.DUPLICATE_CELL_IDS,
+                            severity=ScientificIssueSeverity.ERROR,
+                            message=f"Duplicate identifiers found in row index column of {matrix_path.name}",
+                            userActionRequired=True,
+                        )
+                    ]
+                expr_df = df.iloc[:, 1:]
+            else:
+                # Pure numeric expression columns without an authoritative row ID column
+                expr_df = (
+                    df
+                    if not _is_unnamed_placeholder_header(raw_header_tokens[0])
+                    else df.iloc[:, 1:]
+                )
+
             try:
                 arr = expr_df.to_numpy(dtype=np.float64)
             except (ValueError, TypeError):
@@ -609,13 +674,20 @@ class GenericMatrixImporter:
                     limits=self.config.decompression_limits,
                     expected_delim=delim,
                 )
-                cand_id_sources.append([str(x).strip() for x in df.iloc[:, 0].tolist()])
-                cand_id_sources.append([str(c).strip() for c in df.columns[1:]])
+                raw_header_tokens = _read_raw_header_tokens(
+                    matrix_path, delim=delim, limits=self.config.decompression_limits
+                )
+                if _has_authoritative_row_id_column(df, raw_header_tokens):
+                    cand_id_sources.append([str(x).strip() for x in df.iloc[:, 0].tolist()])
+                    cand_id_sources.append([str(c).strip() for c in df.columns[1:]])
+                else:
+                    cand_id_sources.append([str(c).strip() for c in df.columns])
             except Exception:  # noqa: BLE001
                 pass
 
         if feat_df_cand is not None and len(feat_df_cand.columns) > 0:
-            cand_id_sources.append([str(x).strip() for x in feat_df_cand.iloc[:, 0].tolist()])
+            for col in feat_df_cand.columns:
+                cand_id_sources.append([str(x).strip() for x in feat_df_cand[col].tolist()])
 
         for cand_ids in cand_id_sources:
             if not cand_ids:
@@ -707,7 +779,7 @@ class GenericMatrixImporter:
 
         # 1. Parse expression matrix and initial identifiers
         if matrix_kind == "MTX":
-            _n_rows, _n_cols, _n_entries, coo_matrix = parse_10x_matrix_market(
+            _n_rows, _n_cols, _n_entries, coo_matrix = parse_matrix_market(
                 matrix_path, limits=self.config.decompression_limits
             )
             cell_meta_files = source_set.get_files_by_role(ImportFileRole.CELL_METADATA)
@@ -731,6 +803,25 @@ class GenericMatrixImporter:
                 feat_meta_files[0].local_path, limits=self.config.decompression_limits
             )
 
+            if mapping.cellIdColumn:
+                if mapping.cellIdColumn not in cell_df.columns:
+                    raise ImporterSecurityError(
+                        f"Requested cellIdColumn '{mapping.cellIdColumn}' not found in CELL_METADATA",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
+                cell_id_col = mapping.cellIdColumn
+            else:
+                cell_id_col = cell_df.columns[0]
+
+            if mapping.geneIdColumn and mapping.geneIdColumn not in feat_df.columns:
+                raise ImporterSecurityError(
+                    f"Requested geneIdColumn '{mapping.geneIdColumn}' not found in FEATURE_METADATA",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+            # For MTX, feat_df column 0 represents the source matrix feature axis tokens
+            # (or mapping.geneIdColumn if feat_df has a single ID column)
+            source_feat_col = feat_df.columns[0]
+
             if orientation == MatrixOrientation.CELLS_BY_GENES:
                 if len(cell_df) != _n_rows or len(feat_df) != _n_cols:
                     raise CountValidationError(
@@ -738,19 +829,8 @@ class GenericMatrixImporter:
                         f"CELL_METADATA ({len(cell_df)}) and FEATURE_METADATA ({len(feat_df)})",
                         issue_code=ScientificIssueCode.DIMENSION_MISMATCH,
                     )
-                cell_id_col = (
-                    mapping.cellIdColumn
-                    if mapping.cellIdColumn and mapping.cellIdColumn in cell_df.columns
-                    else cell_df.columns[0]
-                )
-                gene_id_col = (
-                    mapping.geneIdColumn
-                    if mapping.geneIdColumn and mapping.geneIdColumn in feat_df.columns
-                    else feat_df.columns[0]
-                )
-
                 raw_cell_ids = cell_df[cell_id_col].astype(str).tolist()
-                raw_gene_ids = feat_df[gene_id_col].astype(str).tolist()
+                raw_gene_ids = feat_df[source_feat_col].astype(str).tolist()
                 canonical_csr = ensure_csr_matrix(coo_matrix.tocsr())
             else:
                 # GENES_BY_CELLS: rows are genes, cols are cells
@@ -760,19 +840,8 @@ class GenericMatrixImporter:
                         f"FEATURE_METADATA ({len(feat_df)}) and CELL_METADATA ({len(cell_df)})",
                         issue_code=ScientificIssueCode.DIMENSION_MISMATCH,
                     )
-                cell_id_col = (
-                    mapping.cellIdColumn
-                    if mapping.cellIdColumn and mapping.cellIdColumn in cell_df.columns
-                    else cell_df.columns[0]
-                )
-                gene_id_col = (
-                    mapping.geneIdColumn
-                    if mapping.geneIdColumn and mapping.geneIdColumn in feat_df.columns
-                    else feat_df.columns[0]
-                )
-
                 raw_cell_ids = cell_df[cell_id_col].astype(str).tolist()
-                raw_gene_ids = feat_df[gene_id_col].astype(str).tolist()
+                raw_gene_ids = feat_df[source_feat_col].astype(str).tolist()
                 # Explicit transpose from genes x cells -> cells x genes
                 canonical_csr = ensure_csr_matrix(coo_matrix.T.tocsr())
 
@@ -784,16 +853,27 @@ class GenericMatrixImporter:
                 limits=self.config.decompression_limits,
                 expected_delim=delim,
             )
+            raw_header_tokens = _read_raw_header_tokens(
+                matrix_path, delim=delim, limits=self.config.decompression_limits
+            )
 
             if orientation == MatrixOrientation.CELLS_BY_GENES:
                 # Rows are cells, cols are genes
                 if mapping.cellIdColumn and mapping.cellIdColumn in table_df.columns:
                     raw_cell_ids = table_df[mapping.cellIdColumn].astype(str).tolist()
                     expr_df = table_df.drop(columns=[mapping.cellIdColumn])
-                else:
-                    # Column 0 is cell IDs
+                elif _has_authoritative_row_id_column(table_df, raw_header_tokens):
+                    # Column 0 is explicit cell IDs
                     raw_cell_ids = table_df.iloc[:, 0].astype(str).tolist()
                     expr_df = table_df.iloc[:, 1:]
+                else:
+                    # No authoritative row ID column in matrix; df.index is a RangeIndex -> FORBIDDEN
+                    _guard_against_generated_positional_index(table_df.index, context="cell IDs")
+                    raise ImporterSecurityError(
+                        "Expression matrix lacks an authoritative cell identifier column; "
+                        "RangeIndex cannot become obs_names",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
 
                 raw_gene_ids = [str(c).strip() for c in expr_df.columns]
                 expr_mat = expr_df.to_numpy(dtype=np.float64)
@@ -808,10 +888,18 @@ class GenericMatrixImporter:
                 if mapping.geneIdColumn and mapping.geneIdColumn in table_df.columns:
                     raw_gene_ids = table_df[mapping.geneIdColumn].astype(str).tolist()
                     expr_df = table_df.drop(columns=[mapping.geneIdColumn])
-                else:
-                    # Column 0 is gene IDs
+                elif _has_authoritative_row_id_column(table_df, raw_header_tokens):
+                    # Column 0 is explicit gene IDs
                     raw_gene_ids = table_df.iloc[:, 0].astype(str).tolist()
                     expr_df = table_df.iloc[:, 1:]
+                else:
+                    # No authoritative row ID column in matrix; df.index is a RangeIndex -> FORBIDDEN
+                    _guard_against_generated_positional_index(table_df.index, context="feature IDs")
+                    raise ImporterSecurityError(
+                        "Expression matrix lacks an authoritative feature identifier column; "
+                        "RangeIndex cannot become var_names",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
 
                 raw_cell_ids = [str(c).strip() for c in expr_df.columns]
                 expr_mat = expr_df.to_numpy(dtype=np.float64)
@@ -841,19 +929,91 @@ class GenericMatrixImporter:
             )
         ), f"Matrix shape {canonical_csr.shape} must equal ({len(clean_cell_ids)}, {len(clean_gene_ids)})"
 
-        # 3. Species conflict check against confirmed organism
-        if check_ensembl_species_conflict(clean_gene_ids):
-            raise ImporterSecurityError(
-                "Cannot canonicalize dataset containing conflicting Human and Mouse Ensembl IDs",
-                issue_code=ScientificIssueCode.UNRESOLVED_SPECIES,
-            )
-        if has_opposing_ensembl_species(clean_gene_ids, organism):
-            raise ImporterSecurityError(
-                f"Cannot canonicalize dataset: specified organism {organism.value} conflicts with opposing Ensembl IDs",
-                issue_code=ScientificIssueCode.UNRESOLVED_SPECIES,
+        # 3. Construct canonical var and apply FEATURE_METADATA joins by value
+        final_gene_ids = clean_gene_ids
+        canonical_var = pd.DataFrame(index=clean_gene_ids)
+        canonical_var["source_feature_id"] = clean_gene_ids
+
+        feat_meta_files = source_set.get_files_by_role(ImportFileRole.FEATURE_METADATA)
+        if feat_meta_files:
+            feat_df, _ = read_delimited_table(
+                feat_meta_files[0].local_path, limits=self.config.decompression_limits
             )
 
-        # 4. Construct canonical obs and apply CELL_METADATA joins by value
+            # Find matching join column in feat_df (strict value match, no positional join)
+            gene_set = set(clean_gene_ids)
+            join_col = None
+            for col in feat_df.columns:
+                if gene_set.issubset(set(feat_df[col].astype(str))):
+                    join_col = col
+                    break
+
+            if join_col is None:
+                raise ImporterSecurityError(
+                    "Cannot join FEATURE_METADATA to matrix: matrix features missing from metadata table",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+
+            if feat_df[join_col].duplicated().any():
+                raise CountValidationError(
+                    f"Duplicate feature identifiers in FEATURE_METADATA column '{join_col}'",
+                    issue_code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
+                )
+
+            # Deterministic value join: realigns to exact clean_gene_ids order; ignores unreferenced rows
+            realigned_feat_meta = feat_df.set_index(join_col).loc[clean_gene_ids]
+
+            # If mapping.geneIdColumn is requested in FEATURE_METADATA
+            if mapping.geneIdColumn and mapping.geneIdColumn != join_col:
+                if mapping.geneIdColumn not in realigned_feat_meta.columns:
+                    raise ImporterSecurityError(
+                        f"Requested geneIdColumn '{mapping.geneIdColumn}' not found in FEATURE_METADATA",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
+                stable_ids = realigned_feat_meta[mapping.geneIdColumn].astype(str).tolist()
+                clean_stable_ids = validate_identifiers(
+                    stable_ids, context="FEATURE_METADATA stable gene IDs"
+                )
+                if len(clean_stable_ids) != len(set(clean_stable_ids)):
+                    raise CountValidationError(
+                        "Duplicate stable gene identifiers in FEATURE_METADATA",
+                        issue_code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
+                    )
+                final_gene_ids = clean_stable_ids
+                canonical_var = pd.DataFrame(index=clean_stable_ids)
+                canonical_var["source_feature_id"] = clean_gene_ids
+
+            # If mapping.geneSymbolColumn provides descriptive symbols
+            if mapping.geneSymbolColumn:
+                if mapping.geneSymbolColumn not in realigned_feat_meta.columns:
+                    raise ImporterSecurityError(
+                        f"Requested geneSymbolColumn '{mapping.geneSymbolColumn}' not found in FEATURE_METADATA",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
+                canonical_var["gene_symbol"] = (
+                    realigned_feat_meta[mapping.geneSymbolColumn].astype(str).tolist()
+                )
+        else:
+            if mapping.geneSymbolColumn:
+                raise ImporterSecurityError(
+                    "geneSymbolColumn mapping was requested, but no FEATURE_METADATA file was provided in source set",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+
+        # 4. Species conflict check against confirmed organism (checks both source and resolved gene IDs)
+        for id_list_to_check in (clean_gene_ids, final_gene_ids):
+            if check_ensembl_species_conflict(id_list_to_check):
+                raise ImporterSecurityError(
+                    "Cannot canonicalize dataset containing conflicting Human and Mouse Ensembl IDs",
+                    issue_code=ScientificIssueCode.UNRESOLVED_SPECIES,
+                )
+            if has_opposing_ensembl_species(id_list_to_check, organism):
+                raise ImporterSecurityError(
+                    f"Cannot canonicalize dataset: specified organism {organism.value} conflicts with opposing Ensembl IDs",
+                    issue_code=ScientificIssueCode.UNRESOLVED_SPECIES,
+                )
+
+        # 5. Construct canonical obs and apply CELL_METADATA joins by value
         canonical_obs = pd.DataFrame(index=clean_cell_ids)
         cell_meta_files = source_set.get_files_by_role(ImportFileRole.CELL_METADATA)
 
@@ -861,11 +1021,15 @@ class GenericMatrixImporter:
             cell_df, _ = read_delimited_table(
                 cell_meta_files[0].local_path, limits=self.config.decompression_limits
             )
-            join_col = (
-                mapping.cellIdColumn
-                if mapping.cellIdColumn and mapping.cellIdColumn in cell_df.columns
-                else cell_df.columns[0]
-            )
+            if mapping.cellIdColumn:
+                if mapping.cellIdColumn not in cell_df.columns:
+                    raise ImporterSecurityError(
+                        f"Requested cellIdColumn '{mapping.cellIdColumn}' not found in CELL_METADATA",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
+                join_col = mapping.cellIdColumn
+            else:
+                join_col = cell_df.columns[0]
 
             # Check uniqueness of metadata join column
             if cell_df[join_col].duplicated().any():
@@ -973,76 +1137,6 @@ class GenericMatrixImporter:
             ):
                 raise ImporterSecurityError(
                     "Cell metadata mapping was requested, but no CELL_METADATA file was provided in source set",
-                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
-                )
-
-        # 5. Construct canonical var and apply FEATURE_METADATA joins by value
-        final_gene_ids = clean_gene_ids
-        canonical_var = pd.DataFrame(index=clean_gene_ids)
-        canonical_var["source_feature_id"] = clean_gene_ids
-
-        feat_meta_files = source_set.get_files_by_role(ImportFileRole.FEATURE_METADATA)
-        if feat_meta_files:
-            feat_df, _ = read_delimited_table(
-                feat_meta_files[0].local_path, limits=self.config.decompression_limits
-            )
-
-            # Find matching join column in feat_df (strict value match, no positional join)
-            gene_set = set(clean_gene_ids)
-            join_col = None
-            for col in feat_df.columns:
-                if gene_set.issubset(set(feat_df[col].astype(str))):
-                    join_col = col
-                    break
-
-            if join_col is None:
-                raise ImporterSecurityError(
-                    "Cannot join FEATURE_METADATA to matrix: matrix features missing from metadata table",
-                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
-                )
-
-            if feat_df[join_col].duplicated().any():
-                raise CountValidationError(
-                    f"Duplicate feature identifiers in FEATURE_METADATA column '{join_col}'",
-                    issue_code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
-                )
-
-            # Deterministic value join: realigns to exact clean_gene_ids order; ignores unreferenced rows
-            realigned_feat_meta = feat_df.set_index(join_col).loc[clean_gene_ids]
-
-            # If mapping.geneIdColumn points to a stable ID column distinct from join_col
-            if (
-                mapping.geneIdColumn
-                and mapping.geneIdColumn in realigned_feat_meta.columns
-                and mapping.geneIdColumn != join_col
-            ):
-                stable_ids = realigned_feat_meta[mapping.geneIdColumn].astype(str).tolist()
-                clean_stable_ids = validate_identifiers(
-                    stable_ids, context="FEATURE_METADATA stable gene IDs"
-                )
-                if len(clean_stable_ids) != len(set(clean_stable_ids)):
-                    raise CountValidationError(
-                        "Duplicate stable gene identifiers in FEATURE_METADATA",
-                        issue_code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
-                    )
-                final_gene_ids = clean_stable_ids
-                canonical_var = pd.DataFrame(index=clean_stable_ids)
-                canonical_var["source_feature_id"] = clean_gene_ids
-
-            # If mapping.geneSymbolColumn provides descriptive symbols
-            if mapping.geneSymbolColumn:
-                if mapping.geneSymbolColumn not in realigned_feat_meta.columns:
-                    raise ImporterSecurityError(
-                        f"Requested geneSymbolColumn '{mapping.geneSymbolColumn}' not found in FEATURE_METADATA",
-                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
-                    )
-                canonical_var["gene_symbol"] = (
-                    realigned_feat_meta[mapping.geneSymbolColumn].astype(str).tolist()
-                )
-        else:
-            if mapping.geneSymbolColumn:
-                raise ImporterSecurityError(
-                    "geneSymbolColumn mapping was requested, but no FEATURE_METADATA file was provided in source set",
                     issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                 )
 
