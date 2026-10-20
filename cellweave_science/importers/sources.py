@@ -24,11 +24,18 @@ class ImportSourceFile:
 
 @dataclass(frozen=True)
 class ImportSourceSet:
-    """Group of participating source files bound to an import execution."""
+    """Group of participating source files bound to an import execution.
+
+    Invariants:
+    - files: participating source files with assigned roles.
+    - dataset_version_id: authoritative trusted dataset version identity. Required
+      for operations returning ImportInspectionResult (inspect()). Optional for
+      low-level structural helper/cardinality/validation tests.
+    """
 
     source_format: SourceFormat
     files: tuple[ImportSourceFile, ...]
-    dataset_version_id: str = ""
+    dataset_version_id: str | None = None
 
     def get_primary_file(self) -> ImportSourceFile:
         """Retrieve the single PRIMARY file for single-file formats."""

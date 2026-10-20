@@ -118,6 +118,7 @@ def test_golden_g1_human_ensembl_counts_in_x(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_g1", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_g1",
     )
     importer = H5ADImporter()
 
@@ -168,6 +169,7 @@ def test_golden_g2_mouse_ensembl_counts_in_x(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_g2", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_g2",
     )
     importer = H5ADImporter()
 
@@ -262,6 +264,7 @@ def test_golden_g5_normalized_only_rejected(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_g5", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_g5",
     )
     importer = H5ADImporter()
 
@@ -362,6 +365,7 @@ def test_golden_g9_unresolved_organism(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_g9", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_g9",
     )
     importer = H5ADImporter()
 
@@ -384,6 +388,7 @@ def test_golden_g10_conflicting_organism_metadata(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_g10", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_g10",
     )
     importer = H5ADImporter()
 
@@ -676,6 +681,7 @@ def test_organism_100_percent_human_ensembl(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_h100", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_h100",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -696,6 +702,7 @@ def test_organism_100_percent_mouse_ensembl(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_m100", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_m100",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -725,6 +732,7 @@ def test_organism_80_percent_human_20_percent_symbols_unresolved(tmp_path: Path)
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_h80", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_h80",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -755,6 +763,7 @@ def test_organism_80_percent_mouse_20_percent_symbols_unresolved(tmp_path: Path)
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_m80", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_m80",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -775,6 +784,7 @@ def test_organism_mixed_human_mouse_ensembl_conflict(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_mixed", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_mixed",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -798,6 +808,7 @@ def test_organism_symbols_only_no_metadata_needs_mapping(tmp_path: Path) -> None
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_sym", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_sym",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -818,6 +829,7 @@ def test_organism_symbols_only_exact_human_metadata(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_sym_h", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_sym_h",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -837,6 +849,7 @@ def test_organism_symbols_only_exact_mouse_metadata(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_sym_m", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_sym_m",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -856,6 +869,7 @@ def test_organism_explicit_human_conflicts_with_mouse_ensembl(tmp_path: Path) ->
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_conf_hm", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_conf_hm",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -879,6 +893,7 @@ def test_organism_explicit_mouse_conflicts_with_human_ensembl(tmp_path: Path) ->
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_conf_mh", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_conf_mh",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -902,6 +917,7 @@ def test_organism_explicit_unsupported_species_rejected(tmp_path: Path) -> None:
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_unsupp", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_unsupp",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -933,6 +949,7 @@ def test_organism_metadata_fuzzy_substring_values_rejected(
     source_set = ImportSourceSet(
         source_format=SourceFormat.H5AD,
         files=(ImportSourceFile("dsf_fuzz", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_fuzz",
     )
     importer = H5ADImporter()
     inspect_res = importer.inspect(source_set)
@@ -950,14 +967,22 @@ def test_organism_metadata_taxonomy_ids(tmp_path: Path) -> None:
 
     importer = H5ADImporter()
     res_h = importer.inspect(
-        ImportSourceSet(SourceFormat.H5AD, (ImportSourceFile("f1", ImportFileRole.PRIMARY, p_h),))
+        ImportSourceSet(
+            SourceFormat.H5AD,
+            (ImportSourceFile("f1", ImportFileRole.PRIMARY, p_h),),
+            dataset_version_id="dsv_tax_h",
+        )
     )
     assert res_h.detectedOrganism == Organism.HUMAN
 
     p_m = tmp_path / "tax_10090.h5ad"
     ad.AnnData(X=x, obs=obs, var=var, uns={"taxon_id": 10090}).write_h5ad(p_m)
     res_m = importer.inspect(
-        ImportSourceSet(SourceFormat.H5AD, (ImportSourceFile("f2", ImportFileRole.PRIMARY, p_m),))
+        ImportSourceSet(
+            SourceFormat.H5AD,
+            (ImportSourceFile("f2", ImportFileRole.PRIMARY, p_m),),
+            dataset_version_id="dsv_tax_m",
+        )
     )
     assert res_m.detectedOrganism == Organism.MOUSE
 
@@ -1084,3 +1109,54 @@ def test_canonical_uns_audit(tmp_path: Path) -> None:
     assert "pca" not in c_adata.uns
     assert "neighbors" not in c_adata.uns
     assert "unapproved_key" not in c_adata.uns
+
+
+def test_h5ad_inspect_missing_dataset_version_id_fails_controlled(tmp_path: Path) -> None:
+    """inspect() fails closed with MISSING_REQUIRED_METADATA if dataset_version_id is absent."""
+    p = tmp_path / "valid.h5ad"
+    ad.AnnData(
+        X=sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32),
+        obs=pd.DataFrame(index=["c1", "c2"]),
+        var=pd.DataFrame(index=["ENSG00000141510", "ENSG00000139618"]),
+    ).write_h5ad(p)
+
+    importer = H5ADImporter()
+
+    # None dataset_version_id
+    src_none = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("f1", ImportFileRole.PRIMARY, p),),
+        dataset_version_id=None,
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer.inspect(src_none)
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+    # Empty string dataset_version_id
+    src_empty = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("f1", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="   ",
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer.inspect(src_empty)
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+
+def test_h5ad_inspect_dataset_version_id_distinct_from_file_id(tmp_path: Path) -> None:
+    """inspect() reflects exact dataset_version_id and never falls back to file ID."""
+    p = tmp_path / "valid.h5ad"
+    ad.AnnData(
+        X=sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32),
+        obs=pd.DataFrame(index=["c1", "c2"]),
+        var=pd.DataFrame(index=["ENSG00000141510", "ENSG00000139618"]),
+    ).write_h5ad(p)
+
+    src = ImportSourceSet(
+        source_format=SourceFormat.H5AD,
+        files=(ImportSourceFile("dsf_file_identifier_999", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_version_identifier_111",
+    )
+    res = H5ADImporter().inspect(src)
+    assert res.datasetVersionId == "dsv_version_identifier_111"
+    assert res.datasetVersionId != "dsf_file_identifier_999"

@@ -36,6 +36,7 @@ from cellweave_science.importers.canonical import (
 from cellweave_science.importers.checksum import compute_file_sha256
 from cellweave_science.importers.errors import (
     CountValidationError,
+    DecompressionLimitError,
     ImporterSecurityError,
 )
 from cellweave_science.importers.security import (
@@ -66,8 +67,10 @@ from cellweave_science.importers.validation import (
 class TenxMtxImporter:
     """Importer for 10x Genomics Matrix Market (TENX_MTX) triplets."""
 
-    def __init__(self, config: TenxImporterConfig | None = None) -> None:
-        self.config = config or TenxImporterConfig()
+    def __init__(self, config: TenxImporterConfig) -> None:
+        if not isinstance(config, TenxImporterConfig):
+            raise TypeError("config must be an instance of TenxImporterConfig")
+        self.config = config
 
     def detect(self, source_set: ImportSourceSet) -> bool:
         """Determine if this importer supports the given source file set.
@@ -129,6 +132,15 @@ class TenxMtxImporter:
             barcodes = parse_10x_barcodes(
                 barcodes_file.local_path, limits=self.config.decompression_limits
             )
+        except DecompressionLimitError as exc:
+            return [
+                ScientificIssue(
+                    code=ScientificIssueCode.RESOURCE_LIMIT,
+                    severity=ScientificIssueSeverity.ERROR,
+                    message=f"Decompression limit exceeded in barcodes file {barcodes_file.local_path.name}: {exc}",
+                    userActionRequired=True,
+                )
+            ]
         except CountValidationError as exc:
             return [
                 ScientificIssue(
@@ -153,6 +165,15 @@ class TenxMtxImporter:
             features = parse_10x_features_tsv(
                 features_file.local_path, limits=self.config.decompression_limits
             )
+        except DecompressionLimitError as exc:
+            return [
+                ScientificIssue(
+                    code=ScientificIssueCode.RESOURCE_LIMIT,
+                    severity=ScientificIssueSeverity.ERROR,
+                    message=f"Decompression limit exceeded in features file {features_file.local_path.name}: {exc}",
+                    userActionRequired=True,
+                )
+            ]
         except CountValidationError as exc:
             return [
                 ScientificIssue(
@@ -181,6 +202,15 @@ class TenxMtxImporter:
             n_rows, n_cols, _n_entries, _coo = parse_10x_matrix_market(
                 matrix_file.local_path, limits=self.config.decompression_limits
             )
+        except DecompressionLimitError as exc:
+            return [
+                ScientificIssue(
+                    code=ScientificIssueCode.RESOURCE_LIMIT,
+                    severity=ScientificIssueSeverity.ERROR,
+                    message=f"Decompression limit exceeded in Matrix Market file {matrix_file.local_path.name}: {exc}",
+                    userActionRequired=True,
+                )
+            ]
         except CountValidationError as exc:
             return [
                 ScientificIssue(
@@ -231,10 +261,12 @@ class TenxMtxImporter:
 
     def inspect(self, source_set: ImportSourceSet) -> ImportInspectionResult:
         """Extract dataset dimensions, detect candidate organism/gene scheme, and check if mapping is required."""
-        first_file = source_set.files[0] if source_set.files else None
-        version_id = source_set.dataset_version_id or (
-            first_file.dataset_file_id if first_file is not None else ""
-        )
+        if not source_set.dataset_version_id or not source_set.dataset_version_id.strip():
+            raise ImporterSecurityError(
+                "Cannot inspect dataset without required dataset_version_id on source_set",
+                issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+            )
+        version_id = source_set.dataset_version_id.strip()
 
         issues = self.validate(source_set)
         blocking_issues = [iss for iss in issues if iss.severity == ScientificIssueSeverity.ERROR]
@@ -368,15 +400,21 @@ class TenxMtxImporter:
         barcodes_file = source_set.get_single_file_by_role(ImportFileRole.BARCODES)
 
         # 1. Parse triplet components
-        barcodes = parse_10x_barcodes(
-            barcodes_file.local_path, limits=self.config.decompression_limits
-        )
-        features = parse_10x_features_tsv(
-            features_file.local_path, limits=self.config.decompression_limits
-        )
-        _n_rows, _n_cols, _n_entries, coo_matrix = parse_10x_matrix_market(
-            matrix_file.local_path, limits=self.config.decompression_limits
-        )
+        try:
+            barcodes = parse_10x_barcodes(
+                barcodes_file.local_path, limits=self.config.decompression_limits
+            )
+            features = parse_10x_features_tsv(
+                features_file.local_path, limits=self.config.decompression_limits
+            )
+            _n_rows, _n_cols, _n_entries, coo_matrix = parse_10x_matrix_market(
+                matrix_file.local_path, limits=self.config.decompression_limits
+            )
+        except DecompressionLimitError as exc:
+            raise ImporterSecurityError(
+                f"Decompression limit exceeded during canonicalization: {exc}",
+                issue_code=ScientificIssueCode.RESOURCE_LIMIT,
+            ) from exc
 
         clean_feat_ids = [f.feature_id for f in features]
         clean_feat_names = [f.gene_symbol for f in features]
@@ -413,17 +451,22 @@ class TenxMtxImporter:
         clean_obs_names = validate_identifiers(barcodes, context="barcodes (obs_names)")
         canonical_obs = pd.DataFrame(index=clean_obs_names)
 
-        # Populate sample_key: default SMP_001 if unmapped
-        if (
-            mapping is not None
-            and mapping.sampleColumn
-            and mapping.sampleColumn in canonical_obs.columns
-        ):
-            canonical_obs["sample_key"] = canonical_obs[mapping.sampleColumn].astype(str)
-        else:
-            canonical_obs["sample_key"] = "SMP_001"
-
+        # Apply metadata mapping only if explicitly supplied by caller (zero synthetic columns by default)
         if mapping is not None:
+            if mapping.sampleMappings:
+                map_dict = {m.sourceValue: m.sampleKey for m in mapping.sampleMappings}
+                if mapping.sampleColumn and mapping.sampleColumn in canonical_obs.columns:
+                    source_vals = canonical_obs[mapping.sampleColumn].astype(str).tolist()
+                    canonical_obs["sample_key"] = [map_dict.get(v, v) for v in source_vals]
+                elif any(bc in map_dict for bc in clean_obs_names):
+                    canonical_obs["sample_key"] = [map_dict.get(bc, "") for bc in clean_obs_names]
+                elif len(mapping.sampleMappings) == 1:
+                    canonical_obs["sample_key"] = mapping.sampleMappings[0].sampleKey
+            elif mapping.sampleColumn and mapping.sampleColumn in canonical_obs.columns:
+                canonical_obs["sample_key"] = (
+                    canonical_obs[mapping.sampleColumn].astype(str).tolist()
+                )
+
             if mapping.conditionColumn and mapping.conditionColumn in canonical_obs.columns:
                 canonical_obs["condition"] = canonical_obs[mapping.conditionColumn].astype(str)
             if mapping.batchColumn and mapping.batchColumn in canonical_obs.columns:

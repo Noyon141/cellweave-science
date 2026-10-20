@@ -240,10 +240,12 @@ class H5ADImporter:
 
     def inspect(self, source_set: ImportSourceSet) -> ImportInspectionResult:
         """Extract dataset dimensions, detect candidate organism/gene schemes, and check if mapping is required."""
-        primary_file = next((f for f in source_set.files if f.role == ImportFileRole.PRIMARY), None)
-        version_id = source_set.dataset_version_id or (
-            primary_file.dataset_file_id if primary_file is not None else ""
-        )
+        if not source_set.dataset_version_id or not source_set.dataset_version_id.strip():
+            raise ImporterSecurityError(
+                "Cannot inspect dataset without required dataset_version_id on source_set",
+                issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+            )
+        version_id = source_set.dataset_version_id.strip()
 
         issues = self.validate(source_set)
         blocking_issues = [iss for iss in issues if iss.severity == ScientificIssueSeverity.ERROR]
@@ -264,8 +266,7 @@ class H5ADImporter:
                 referenceBuildCandidate=None,
             )
 
-        if primary_file is None:
-            primary_file = source_set.get_primary_file()
+        primary_file = source_set.get_primary_file()
         path = validate_trusted_local_path(primary_file.local_path)
         adata = _safe_read_h5ad(path)
 

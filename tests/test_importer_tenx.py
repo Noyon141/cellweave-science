@@ -34,7 +34,9 @@ from cellweave_science.contracts import (
     GeneIdScheme,
     ImportFileRole,
     InspectionStatus,
+    MetadataMappingSubmission,
     Organism,
+    SampleMappingEntry,
     ScientificIssueCode,
     ScientificIssueSeverity,
     SourceFormat,
@@ -49,6 +51,14 @@ from cellweave_science.importers import (
 )
 from cellweave_science.importers.canonical import validate_canonical_anndata
 from cellweave_science.importers.errors import ImporterSecurityError
+from cellweave_science.importers.security import DecompressionLimits
+from cellweave_science.importers.tenx_shared import TenxImporterConfig
+
+DEFAULT_TEST_LIMITS = DecompressionLimits(
+    max_uncompressed_bytes=100 * 1024 * 1024,
+    max_compression_ratio=200.0,
+)
+DEFAULT_TEST_CONFIG = TenxImporterConfig(decompression_limits=DEFAULT_TEST_LIMITS)
 
 # =========================================================================
 # FIXTURE BUILDER HELPERS
@@ -175,7 +185,7 @@ def test_tenx_importers_protocol_conformance() -> None:
     h5_importer = TenxH5Importer()
     assert isinstance(h5_importer, DatasetImporter)
 
-    mtx_importer = TenxMtxImporter()
+    mtx_importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     assert isinstance(mtx_importer, DatasetImporter)
 
 
@@ -368,7 +378,7 @@ def test_mtx_detect_positive_and_negative(tmp_path: Path) -> None:
         entries=[(1, 1, 10)],
     )
 
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
 
     # Valid triplet
     src_valid = ImportSourceSet(
@@ -409,8 +419,9 @@ def test_mtx_bad_header_rejected(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.MALFORMED_INPUT
@@ -433,8 +444,9 @@ def test_mtx_dimensions_mismatch_rejected(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) >= 1
     assert issues[0].code == ScientificIssueCode.DIMENSION_MISMATCH
@@ -459,8 +471,9 @@ def test_mtx_truncated_data_rejected(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.MALFORMED_INPUT
@@ -483,8 +496,9 @@ def test_mtx_coordinate_out_of_bounds_rejected(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.MALFORMED_INPUT
@@ -564,8 +578,9 @@ def test_mtx_modality_mixed_rejected(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.UNSUPPORTED_MODALITY
@@ -598,8 +613,9 @@ def test_mtx_modern_features_tsv_gzip(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 0
 
@@ -631,8 +647,9 @@ def test_mtx_legacy_genes_tsv_gzip(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 0
 
@@ -660,8 +677,9 @@ def test_duplicate_gene_symbols_allowed_with_unique_stable_ids(tmp_path: Path) -
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 0
 
@@ -687,8 +705,9 @@ def test_barcodes_suffix_preservation(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     out_p = tmp_path / "canonical_bc.h5ad"
     importer.canonicalize(
         source_set=src,
@@ -803,8 +822,9 @@ def test_orientation_transpose_golden_mtx(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
+        dataset_version_id="dsv_g3",
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
 
     out_p = tmp_path / "canonical_mtx_orient.h5ad"
     res = importer.canonicalize(
@@ -847,7 +867,9 @@ def test_10x_organism_human_and_mouse_candidates(tmp_path: Path) -> None:
     importer_h5 = TenxH5Importer()
     res_h = importer_h5.inspect(
         ImportSourceSet(
-            SourceFormat.TENX_H5, (ImportSourceFile("f1", ImportFileRole.PRIMARY, p_h),)
+            SourceFormat.TENX_H5,
+            (ImportSourceFile("f1", ImportFileRole.PRIMARY, p_h),),
+            dataset_version_id="dsv_h_test",
         )
     )
     assert res_h.detectedOrganism == Organism.HUMAN
@@ -860,7 +882,7 @@ def test_10x_organism_human_and_mouse_candidates(tmp_path: Path) -> None:
         barcodes=["c1"],
         entries=[(1, 1, 1)],
     )
-    importer_mtx = TenxMtxImporter()
+    importer_mtx = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     res_m = importer_mtx.inspect(
         ImportSourceSet(
             SourceFormat.TENX_MTX,
@@ -869,6 +891,7 @@ def test_10x_organism_human_and_mouse_candidates(tmp_path: Path) -> None:
                 ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
                 ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
             ),
+            dataset_version_id="dsv_m_test",
         )
     )
     assert res_m.detectedOrganism == Organism.MOUSE
@@ -890,7 +913,11 @@ def test_10x_organism_mixed_species_conflict(tmp_path: Path) -> None:
     )
     importer = TenxH5Importer()
     res = importer.inspect(
-        ImportSourceSet(SourceFormat.TENX_H5, (ImportSourceFile("f1", ImportFileRole.PRIMARY, p),))
+        ImportSourceSet(
+            SourceFormat.TENX_H5,
+            (ImportSourceFile("f1", ImportFileRole.PRIMARY, p),),
+            dataset_version_id="dsv_mixed_test",
+        )
     )
     assert res.status == InspectionStatus.INVALID
     assert any(
@@ -915,7 +942,11 @@ def test_10x_organism_symbols_only_needs_mapping(tmp_path: Path) -> None:
     )
     importer = TenxH5Importer()
     res = importer.inspect(
-        ImportSourceSet(SourceFormat.TENX_H5, (ImportSourceFile("f1", ImportFileRole.PRIMARY, p),))
+        ImportSourceSet(
+            SourceFormat.TENX_H5,
+            (ImportSourceFile("f1", ImportFileRole.PRIMARY, p),),
+            dataset_version_id="dsv_sym_test",
+        )
     )
     assert res.status == InspectionStatus.NEEDS_MAPPING
     assert res.requiresMapping is True
@@ -968,7 +999,7 @@ def test_10x_count_ambiguous_near_integral_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.AMBIGUOUS_COUNT_SEMANTICS
@@ -990,7 +1021,7 @@ def test_10x_count_fractional_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.NON_COUNT_INPUT
@@ -1012,7 +1043,7 @@ def test_10x_count_negative_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.NON_COUNT_INPUT
@@ -1095,7 +1126,7 @@ def test_10x_slot_hygiene_and_round_trip_mtx(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     out_p = tmp_path / "canonical_hygiene_mtx.h5ad"
 
     res = importer.canonicalize(
@@ -1173,7 +1204,7 @@ def test_10x_source_immutability_mtx(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     out_p = tmp_path / "canonical_immut_mtx.h5ad"
     importer.canonicalize(
         source_set=src,
@@ -1235,7 +1266,7 @@ def test_mtx_duplicate_barcodes_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.DUPLICATE_CELL_IDS
@@ -1260,7 +1291,7 @@ def test_mtx_blank_barcodes_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.MALFORMED_INPUT
@@ -1285,7 +1316,7 @@ def test_mtx_duplicate_stable_feature_ids_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS
@@ -1310,7 +1341,7 @@ def test_mtx_blank_feature_id_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.MALFORMED_INPUT
@@ -1335,7 +1366,7 @@ def test_mtx_modality_antibody_only_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.UNSUPPORTED_MODALITY
@@ -1361,7 +1392,7 @@ def test_mtx_corrupt_gzip_rejected(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     issues = importer.validate(src)
     assert len(issues) == 1
     assert issues[0].code == ScientificIssueCode.MALFORMED_INPUT
@@ -1384,7 +1415,7 @@ def test_integral_floats_accepted(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     out_p = tmp_path / "canonical_float.h5ad"
     res = importer.canonicalize(
         source_set=src,
@@ -1414,7 +1445,7 @@ def test_zero_heavy_sparse_matrix_preserved(tmp_path: Path) -> None:
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
     )
-    importer = TenxMtxImporter()
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
     out_p = tmp_path / "canonical_zero_heavy.h5ad"
     importer.canonicalize(
         source_set=src,
@@ -1426,3 +1457,354 @@ def test_zero_heavy_sparse_matrix_preserved(tmp_path: Path) -> None:
     assert c_adata.shape == (500, 1000)
     assert sp.isspmatrix_csr(c_adata.X)
     assert c_adata.X.nnz == 2
+
+
+# =========================================================================
+# STEP F CORRECTION TESTS: CONFIG, DECOMPRESSION, SAMPLE AUTHORITY, IDENTITY
+# =========================================================================
+
+
+def test_tenx_config_fail_closed_validation() -> None:
+    """TenxImporterConfig requires explicit, valid DecompressionLimits with zero defaults."""
+    # 1. Missing decompression_limits raises TypeError
+    with pytest.raises(TypeError):
+        TenxImporterConfig()  # type: ignore[call-arg]
+
+    # 2. None decompression_limits raises TypeError
+    with pytest.raises(TypeError, match="must be an instance of DecompressionLimits"):
+        TenxImporterConfig(decompression_limits=None)  # type: ignore[arg-type]
+
+    # 3. Invalid non-DecompressionLimits type raises TypeError
+    with pytest.raises(TypeError, match="must be an instance of DecompressionLimits"):
+        TenxImporterConfig(decompression_limits="not_a_limit")  # type: ignore[arg-type]
+
+    # 4. Invalid limits within DecompressionLimits fail closed via Step D validator
+    with pytest.raises(ImporterSecurityError, match="must be an integer strictly greater than 0"):
+        DecompressionLimits(max_uncompressed_bytes=0, max_compression_ratio=10.0)
+
+    with pytest.raises(ImporterSecurityError, match="must be a float strictly greater than 0.0"):
+        DecompressionLimits(max_uncompressed_bytes=1000, max_compression_ratio=0.0)
+
+    # 5. TenxMtxImporter rejects non-TenxImporterConfig
+    with pytest.raises(TypeError, match="config must be an instance of TenxImporterConfig"):
+        TenxMtxImporter(None)  # type: ignore[arg-type]
+
+
+def test_10x_mtx_decompression_limits_matrix_fails_resource_limit(tmp_path: Path) -> None:
+    """matrix.mtx.gz exceeding max_uncompressed_bytes fails closed with RESOURCE_LIMIT."""
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "small_matrix_limit",
+        features=[("ENSG1", "TP53", "Gene Expression")],
+        barcodes=["BC1"],
+        entries=[(1, 1, 5)],
+        gzip_matrix=True,
+    )
+    src = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id="dsv_test",
+    )
+    small_limits = DecompressionLimits(max_uncompressed_bytes=10, max_compression_ratio=200.0)
+    importer = TenxMtxImporter(TenxImporterConfig(decompression_limits=small_limits))
+
+    issues = importer.validate(src)
+    assert len(issues) == 1
+    assert issues[0].code == ScientificIssueCode.RESOURCE_LIMIT
+    assert "Decompression limit exceeded" in issues[0].message
+
+
+def test_10x_mtx_decompression_limits_features_fails_resource_limit(tmp_path: Path) -> None:
+    """features.tsv.gz exceeding max_uncompressed_bytes fails closed with RESOURCE_LIMIT."""
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "small_feat_limit",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["BC1"],
+        entries=[(1, 1, 5)],
+        gzip_features=True,
+    )
+    src = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id="dsv_test",
+    )
+    small_limits = DecompressionLimits(max_uncompressed_bytes=10, max_compression_ratio=200.0)
+    importer = TenxMtxImporter(TenxImporterConfig(decompression_limits=small_limits))
+
+    issues = importer.validate(src)
+    assert len(issues) == 1
+    assert issues[0].code == ScientificIssueCode.RESOURCE_LIMIT
+    assert "Decompression limit exceeded" in issues[0].message
+
+
+def test_10x_mtx_decompression_limits_legacy_genes_fails_resource_limit(tmp_path: Path) -> None:
+    """legacy genes.tsv.gz exceeding max_uncompressed_bytes fails closed with RESOURCE_LIMIT."""
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "small_genes_limit",
+        features=[("ENSG00000141510", "TP53")],
+        barcodes=["BC1"],
+        entries=[(1, 1, 5)],
+        legacy_genes=True,
+        gzip_features=True,
+    )
+    src = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id="dsv_test",
+    )
+    small_limits = DecompressionLimits(max_uncompressed_bytes=10, max_compression_ratio=200.0)
+    importer = TenxMtxImporter(TenxImporterConfig(decompression_limits=small_limits))
+
+    issues = importer.validate(src)
+    assert len(issues) == 1
+    assert issues[0].code == ScientificIssueCode.RESOURCE_LIMIT
+    assert "Decompression limit exceeded" in issues[0].message
+
+
+def test_10x_mtx_decompression_limits_barcodes_fails_resource_limit(tmp_path: Path) -> None:
+    """barcodes.tsv.gz exceeding max_uncompressed_bytes fails closed with RESOURCE_LIMIT."""
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "small_bc_limit",
+        features=[("ENSG1", "TP53", "Gene Expression")],
+        barcodes=["CELL_BARCODE_LONG_STRING_001"],
+        entries=[(1, 1, 5)],
+        gzip_barcodes=True,
+    )
+    src = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id="dsv_test",
+    )
+    small_limits = DecompressionLimits(max_uncompressed_bytes=10, max_compression_ratio=200.0)
+    importer = TenxMtxImporter(TenxImporterConfig(decompression_limits=small_limits))
+
+    issues = importer.validate(src)
+    assert len(issues) == 1
+    assert issues[0].code == ScientificIssueCode.RESOURCE_LIMIT
+    assert "Decompression limit exceeded" in issues[0].message
+
+
+def test_10x_canonicalize_no_sample_mapping_zero_obs_columns(tmp_path: Path) -> None:
+    """Case A: When no sample mapping is supplied, canonical obs has shape (N, 0) and zero synthetic columns."""
+    # 1. TenxMtxImporter
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "case_a_mtx",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["CELL_01", "CELL_02"],
+        entries=[(1, 1, 10), (1, 2, 20)],
+    )
+    src_mtx = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id="dsv_case_a",
+    )
+    importer_mtx = TenxMtxImporter(DEFAULT_TEST_CONFIG)
+    out_mtx = tmp_path / "canonical_case_a_mtx.h5ad"
+    importer_mtx.canonicalize(
+        source_set=src_mtx,
+        output_path=str(out_mtx),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        mapping=None,
+    )
+    adata_mtx = ad.read_h5ad(out_mtx)
+    assert adata_mtx.obs.shape == (2, 0)
+    assert "sample_key" not in adata_mtx.obs.columns
+    assert list(adata_mtx.obs_names) == ["CELL_01", "CELL_02"]
+
+    # 2. TenxH5Importer
+    p_h5 = create_synthetic_10x_h5(
+        tmp_path / "case_a_h5.h5",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["CELL_01", "CELL_02"],
+        data=np.array([10, 20], dtype=np.int32),
+        indices=np.array([0, 0], dtype=np.int32),
+        indptr=np.array([0, 1, 2], dtype=np.int32),
+    )
+    src_h5 = ImportSourceSet(
+        SourceFormat.TENX_H5,
+        (ImportSourceFile("h1", ImportFileRole.PRIMARY, p_h5),),
+        dataset_version_id="dsv_case_a_h5",
+    )
+    importer_h5 = TenxH5Importer()
+    out_h5 = tmp_path / "canonical_case_a_h5.h5ad"
+    importer_h5.canonicalize(
+        source_set=src_h5,
+        output_path=str(out_h5),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        mapping=None,
+    )
+    adata_h5 = ad.read_h5ad(out_h5)
+    assert adata_h5.obs.shape == (2, 0)
+    assert "sample_key" not in adata_h5.obs.columns
+    assert list(adata_h5.obs_names) == ["CELL_01", "CELL_02"]
+
+
+def test_10x_canonicalize_with_explicit_sample_mapping(tmp_path: Path) -> None:
+    """Case B: When explicit sample mapping is supplied, canonical obs maps exact values."""
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "case_b_mtx",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["CELL_01", "CELL_02"],
+        entries=[(1, 1, 10), (1, 2, 20)],
+    )
+    src_mtx = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id="dsv_case_b",
+    )
+    mapping = MetadataMappingSubmission(
+        datasetVersionId="dsv_case_b",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        sampleMappings=[
+            SampleMappingEntry(sourceValue="CELL_01", sampleKey="Donor_Treated"),
+            SampleMappingEntry(sourceValue="CELL_02", sampleKey="Donor_Control"),
+        ],
+    )
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
+    out_mtx = tmp_path / "canonical_case_b_mtx.h5ad"
+    importer.canonicalize(
+        source_set=src_mtx,
+        output_path=str(out_mtx),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        mapping=mapping,
+    )
+    adata = ad.read_h5ad(out_mtx)
+    assert "sample_key" in adata.obs.columns
+    assert list(adata.obs["sample_key"]) == ["Donor_Treated", "Donor_Control"]
+    assert "SMP_001" not in adata.obs["sample_key"].values
+
+
+def test_10x_canonicalize_with_single_library_sample_mapping(tmp_path: Path) -> None:
+    """When a single sample mapping is provided for a 10x run, all cells map to that sample key."""
+    p_h5 = create_synthetic_10x_h5(
+        tmp_path / "case_b_single.h5",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["CELL_01", "CELL_02"],
+        data=np.array([10, 20], dtype=np.int32),
+        indices=np.array([0, 0], dtype=np.int32),
+        indptr=np.array([0, 1, 2], dtype=np.int32),
+    )
+    src_h5 = ImportSourceSet(
+        SourceFormat.TENX_H5,
+        (ImportSourceFile("h1", ImportFileRole.PRIMARY, p_h5),),
+        dataset_version_id="dsv_single",
+    )
+    mapping = MetadataMappingSubmission(
+        datasetVersionId="dsv_single",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        sampleMappings=[
+            SampleMappingEntry(sourceValue="run_10x_library", sampleKey="Patient_Alpha"),
+        ],
+    )
+    importer = TenxH5Importer()
+    out_h5 = tmp_path / "canonical_single_mapping.h5ad"
+    importer.canonicalize(
+        source_set=src_h5,
+        output_path=str(out_h5),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        mapping=mapping,
+    )
+    adata = ad.read_h5ad(out_h5)
+    assert "sample_key" in adata.obs.columns
+    assert list(adata.obs["sample_key"]) == ["Patient_Alpha", "Patient_Alpha"]
+
+
+def test_10x_inspect_missing_dataset_version_id_fails_controlled(tmp_path: Path) -> None:
+    """inspect() for both 10x importers fails closed if dataset_version_id is missing or whitespace."""
+    # 1. TenxH5
+    p_h5 = create_synthetic_10x_h5(
+        tmp_path / "id_auth.h5",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["c1"],
+        data=np.array([1], dtype=np.int32),
+        indices=np.array([0], dtype=np.int32),
+        indptr=np.array([0, 1], dtype=np.int32),
+    )
+    importer_h5 = TenxH5Importer()
+    src_h5_none = ImportSourceSet(
+        SourceFormat.TENX_H5,
+        (ImportSourceFile("f1", ImportFileRole.PRIMARY, p_h5),),
+        dataset_version_id=None,
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer_h5.inspect(src_h5_none)
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+    src_h5_empty = ImportSourceSet(
+        SourceFormat.TENX_H5,
+        (ImportSourceFile("f1", ImportFileRole.PRIMARY, p_h5),),
+        dataset_version_id="   ",
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer_h5.inspect(src_h5_empty)
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+    # 2. TenxMtx
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "id_auth_mtx",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["c1"],
+        entries=[(1, 1, 1)],
+    )
+    importer_mtx = TenxMtxImporter(DEFAULT_TEST_CONFIG)
+    src_mtx_none = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id=None,
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer_mtx.inspect(src_mtx_none)
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+
+def test_10x_inspect_dataset_version_id_distinct_from_file_id(tmp_path: Path) -> None:
+    """inspect() reflects exact dataset_version_id and never falls back to file ID."""
+    p_h5 = create_synthetic_10x_h5(
+        tmp_path / "distinct_id.h5",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["c1"],
+        data=np.array([1], dtype=np.int32),
+        indices=np.array([0], dtype=np.int32),
+        indptr=np.array([0, 1], dtype=np.int32),
+    )
+    src = ImportSourceSet(
+        SourceFormat.TENX_H5,
+        (ImportSourceFile("dsf_primary_file_xyz", ImportFileRole.PRIMARY, p_h5),),
+        dataset_version_id="dsv_trusted_version_abc",
+    )
+    res = TenxH5Importer().inspect(src)
+    assert res.datasetVersionId == "dsv_trusted_version_abc"
+    assert res.datasetVersionId != "dsf_primary_file_xyz"

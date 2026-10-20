@@ -70,7 +70,9 @@ class TenxH5Importer:
     """Importer for 10x Genomics HDF5 (TENX_H5) filtered feature barcode matrices."""
 
     def __init__(self, config: TenxImporterConfig | None = None) -> None:
-        self.config = config or TenxImporterConfig()
+        if config is not None and not isinstance(config, TenxImporterConfig):
+            raise TypeError("config must be an instance of TenxImporterConfig")
+        self.config = config
 
     def detect(self, source_set: ImportSourceSet) -> bool:
         """Determine if this importer supports the given source file set.
@@ -399,10 +401,12 @@ class TenxH5Importer:
 
     def inspect(self, source_set: ImportSourceSet) -> ImportInspectionResult:
         """Extract dataset dimensions, detect candidate organism/gene scheme, and check if mapping is required."""
-        primary_file = next((f for f in source_set.files if f.role == ImportFileRole.PRIMARY), None)
-        version_id = source_set.dataset_version_id or (
-            primary_file.dataset_file_id if primary_file is not None else ""
-        )
+        if not source_set.dataset_version_id or not source_set.dataset_version_id.strip():
+            raise ImporterSecurityError(
+                "Cannot inspect dataset without required dataset_version_id on source_set",
+                issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+            )
+        version_id = source_set.dataset_version_id.strip()
 
         issues = self.validate(source_set)
         blocking_issues = [iss for iss in issues if iss.severity == ScientificIssueSeverity.ERROR]
@@ -423,8 +427,7 @@ class TenxH5Importer:
                 referenceBuildCandidate=None,
             )
 
-        if primary_file is None:
-            primary_file = source_set.get_primary_file()
+        primary_file = source_set.get_primary_file()
         path = validate_trusted_local_path(primary_file.local_path)
 
         with h5py.File(path, "r") as h5:
@@ -597,17 +600,22 @@ class TenxH5Importer:
         clean_obs_names = validate_identifiers(clean_barcodes, context="barcodes (obs_names)")
         canonical_obs = pd.DataFrame(index=clean_obs_names)
 
-        # Populate sample_key: default SMP_001 if unmapped
-        if (
-            mapping is not None
-            and mapping.sampleColumn
-            and mapping.sampleColumn in canonical_obs.columns
-        ):
-            canonical_obs["sample_key"] = canonical_obs[mapping.sampleColumn].astype(str)
-        else:
-            canonical_obs["sample_key"] = "SMP_001"
-
+        # Apply metadata mapping only if explicitly supplied by caller (zero synthetic columns by default)
         if mapping is not None:
+            if mapping.sampleMappings:
+                map_dict = {m.sourceValue: m.sampleKey for m in mapping.sampleMappings}
+                if mapping.sampleColumn and mapping.sampleColumn in canonical_obs.columns:
+                    source_vals = canonical_obs[mapping.sampleColumn].astype(str).tolist()
+                    canonical_obs["sample_key"] = [map_dict.get(v, v) for v in source_vals]
+                elif any(bc in map_dict for bc in clean_obs_names):
+                    canonical_obs["sample_key"] = [map_dict.get(bc, "") for bc in clean_obs_names]
+                elif len(mapping.sampleMappings) == 1:
+                    canonical_obs["sample_key"] = mapping.sampleMappings[0].sampleKey
+            elif mapping.sampleColumn and mapping.sampleColumn in canonical_obs.columns:
+                canonical_obs["sample_key"] = (
+                    canonical_obs[mapping.sampleColumn].astype(str).tolist()
+                )
+
             if mapping.conditionColumn and mapping.conditionColumn in canonical_obs.columns:
                 canonical_obs["condition"] = canonical_obs[mapping.conditionColumn].astype(str)
             if mapping.batchColumn and mapping.batchColumn in canonical_obs.columns:

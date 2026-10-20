@@ -12,7 +12,7 @@ Supports:
 from __future__ import annotations
 
 from collections.abc import Generator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -37,14 +37,20 @@ GENE_EXPRESSION_MODALITY = "Gene Expression"
 
 @dataclass(frozen=True)
 class TenxImporterConfig:
-    """Configuration for 10x importer technical safety and resource limits."""
+    """Configuration for 10x importer technical safety and resource limits (Fail-Closed).
 
-    decompression_limits: DecompressionLimits = field(
-        default_factory=lambda: DecompressionLimits(
-            max_uncompressed_bytes=10 * 1024 * 1024 * 1024,  # 10 GiB technical ceiling
-            max_compression_ratio=200.0,
-        )
-    )
+    Invariants:
+    1. decompression_limits is mandatory and must be an instance of DecompressionLimits.
+    2. Zero permissive defaults: callers must provide explicit limits.
+    """
+
+    decompression_limits: DecompressionLimits
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.decompression_limits, DecompressionLimits):
+            raise TypeError(
+                f"decompression_limits must be an instance of DecompressionLimits, got {type(self.decompression_limits).__name__}"
+            )
 
 
 @dataclass(frozen=True)
