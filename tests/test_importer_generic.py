@@ -1,4 +1,4 @@
-"""Comprehensive unit, golden, and regression tests for Phase 3 Step G Generic Matrix Importer:
+"""Comprehensive unit, golden, and regression tests for Phase 3 Step G / G.2 Generic Matrix Importer:
 - GenericMatrixImporter (GENERIC_MATRIX)
 
 Test matrix:
@@ -6,25 +6,29 @@ Test matrix:
 2. Delimiter & Container Sniffing (CSV, TSV, MTX, ambiguous delimiters, comment handling).
 3. Delimiter Extension-Agnostic Policy (content-based detection; .csv vs .tsv produce identical interpretations).
 4. Format Detection & Cardinality (valid roles MATRIX, optional CELL_METADATA / FEATURE_METADATA).
-5. Validation logic (structural errors, non-numeric tables, dimension mismatch, count anomalies, duplicate IDs).
-6. Inspection logic (datasetVersionId authority, NEEDS_MAPPING status, column discovery).
-7. Inspection status matrix (NEEDS_MAPPING vs INVALID across failure modes).
-8. Golden CSV Tests (CELLS_BY_GENES & GENES_BY_CELLS with exact non-square matrix verification).
-9. Golden TSV Tests (plain and bounded gzip).
-10. Golden MTX Tests (coordinate format with external CELL_METADATA and FEATURE_METADATA).
-11. Feature metadata join test matrix (A: same-order, B: reordered, C: duplicate, D: missing, E: extra rows).
-12. Cell metadata join test matrix (A: same-order, B: reordered, C: duplicate, D: missing, E: extra rows).
-13. Strict Sample Mapping Authority (no source pass-through, complete mapping requirement).
-14. Biological annotation mappings (condition, batch, biological/technical replicates).
-15. Canonical obs schema tests (complete mapping vs minimal mapping with zero optional columns).
-16. Canonical var schema tests (stable IDs, source_feature_id, gene_symbol only when mapped).
-17. Stable ID + duplicate symbol test (valid when stable IDs are unique).
-18. Organism and Gene ID Scheme resolution tests.
-19. Reference build preservation (explicit preserved, missing is None).
-20. Raw count strictness (integer, integral floats, fractional, negative, NaN/Inf, ambiguous near-integral).
-21. Policy B canonicalization slot hygiene (CSR in X, empty layers/obsm/varm, controlled uns).
-22. Source immutability & path collision safety.
-23. Exact round-trip assert for CSV and MTX fixtures.
+5. Validation logic (structural errors, non-numeric tables, count anomalies, duplicate column headers).
+6. Inspection logic (datasetVersionId authority, NEEDS_MAPPING vs INVALID status, column discovery).
+7. Golden CSV Tests (CELLS_BY_GENES via matrixCellIdColumn & GENES_BY_CELLS via matrixFeatureIdColumn).
+8. Golden TSV Tests (plain and bounded gzip).
+9. Golden MTX Tests (CELLS_BY_GENES & GENES_BY_CELLS with explicit cellAxisIndexColumn & featureAxisIndexColumn).
+10. Reordered MTX Metadata Golden Test (Section 16: non-square 3x2 GENES_BY_CELLS with reordered metadata).
+11. MTX Axis Coordinate Error Tests (Section 17: zero, negative, fractional, duplicate, missing, gap, out-of-range, non-numeric, blank/null).
+12. MTX Row-Order Independence Tests (Section 18: multiple permutations produce identical canonical output).
+13. CSV Misleading-First-Column Regression Tests (Section 19: 'batch,ENSG1,ENSG2' without/with matrixCellIdColumn).
+14. GENES_BY_CELLS Explicit Feature Row Tests (Section 20: 'probe_label,CELL_A,CELL_B' without/with matrixFeatureIdColumn).
+15. Feature metadata join test matrix (explicit featureMetadataJoinColumn, reordered, duplicate, missing, extra rows).
+16. Cell metadata join test matrix (explicit cellMetadataJoinColumn, translated cellIdColumn, reordered, duplicate, missing, extra rows).
+17. Strict Sample Mapping Authority (no source pass-through, complete mapping requirement).
+18. Biological annotation mappings (condition, batch, biological/technical replicates).
+19. Canonical obs schema tests (complete mapping vs minimal mapping; no axis index helper columns persisted).
+20. Canonical var schema tests (stable IDs, source_feature_id, gene_symbol only when mapped; no axis index columns persisted).
+21. Stable ID + duplicate symbol test (valid when stable IDs are unique).
+22. Organism, Gene ID Scheme, & Reference build resolution tests.
+23. Raw count strictness (integer, integral floats, fractional, negative, NaN/Inf, ambiguous near-integral).
+24. Policy B canonicalization slot hygiene (CSR in X, empty layers/obsm/varm, controlled uns).
+25. Source immutability & path collision safety.
+26. Exact round-trip assertions for CSV and MTX fixtures.
+27. RangeIndex & Header Authority regression tests.
 """
 
 from __future__ import annotations
@@ -151,6 +155,12 @@ def make_mapping(
     cell_id_column: str | None = None,
     gene_id_column: str | None = None,
     gene_symbol_column: str | None = None,
+    matrix_cell_id_column: str | None = None,
+    matrix_feature_id_column: str | None = None,
+    cell_metadata_join_column: str | None = None,
+    feature_metadata_join_column: str | None = None,
+    cell_axis_index_column: str | None = None,
+    feature_axis_index_column: str | None = None,
     sample_column: str | None = None,
     sample_mappings: list[SampleMappingEntry] | None = None,
     condition_column: str | None = None,
@@ -159,7 +169,7 @@ def make_mapping(
     technical_replicate_column: str | None = None,
     reference_build: str | None = None,
 ) -> MetadataMappingSubmission:
-    """Helper to instantiate fully valid MetadataMappingSubmission with defaults."""
+    """Helper to instantiate fully valid MetadataMappingSubmission with explicit Step G.1 fields."""
     return MetadataMappingSubmission(
         datasetVersionId=dataset_version_id,
         organism=organism,
@@ -168,6 +178,12 @@ def make_mapping(
         cellIdColumn=cell_id_column,
         geneIdColumn=gene_id_column,
         geneSymbolColumn=gene_symbol_column,
+        matrixCellIdColumn=matrix_cell_id_column,
+        matrixFeatureIdColumn=matrix_feature_id_column,
+        cellMetadataJoinColumn=cell_metadata_join_column,
+        featureMetadataJoinColumn=feature_metadata_join_column,
+        cellAxisIndexColumn=cell_axis_index_column,
+        featureAxisIndexColumn=feature_axis_index_column,
         sampleColumn=sample_column,
         sampleMappings=sample_mappings,
         conditionColumn=condition_column,
@@ -262,19 +278,16 @@ def test_delimiter_extension_agnostic_single_column(tmp_path: Path) -> None:
     csv_file.write_text(content, encoding="utf-8")
     tsv_file.write_text(content, encoding="utf-8")
 
-    # Both infer identical delimiter strictly from content
     delim_csv = sniff_delimiter(csv_file, DEFAULT_TEST_LIMITS)
     delim_tsv = sniff_delimiter(tsv_file, DEFAULT_TEST_LIMITS)
     assert delim_csv == delim_tsv
 
-    # Both parse into identical single-column DataFrames
     df_csv, _ = read_delimited_table(csv_file, DEFAULT_TEST_LIMITS)
     df_tsv, _ = read_delimited_table(tsv_file, DEFAULT_TEST_LIMITS)
     pd.testing.assert_frame_equal(df_csv, df_tsv)
     assert list(df_csv.columns) == ["token_column"]
     assert df_csv["token_column"].tolist() == ["val_1", "val_2", "val_3"]
 
-    # When evaluated as expression matrices, both fail identically with MALFORMED_INPUT
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     issues_csv = importer.validate(
         create_source_set([create_source_file(csv_file, ImportFileRole.MATRIX)])
@@ -296,25 +309,21 @@ def test_delimiter_extension_agnostic_single_column(tmp_path: Path) -> None:
 def test_detect_supported_formats(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # 1. Plain CSV
     csv_file = tmp_path / "mat.csv"
     csv_file.write_text("cell_id,g1,g2\nc1,1,2\n", encoding="utf-8")
     source_set_csv = create_source_set([create_source_file(csv_file, ImportFileRole.MATRIX)])
     assert importer.detect(source_set_csv) is True
 
-    # 2. Plain TSV
     tsv_file = tmp_path / "mat.tsv"
     tsv_file.write_text("cell_id\tg1\tg2\nc1\t1\t2\n", encoding="utf-8")
     source_set_tsv = create_source_set([create_source_file(tsv_file, ImportFileRole.MATRIX)])
     assert importer.detect(source_set_tsv) is True
 
-    # 3. Plain MTX
     mtx_file = tmp_path / "mat.mtx"
     create_mtx_file(mtx_file, 2, 2, [(1, 1, 5)])
     source_set_mtx = create_source_set([create_source_file(mtx_file, ImportFileRole.MATRIX)])
     assert importer.detect(source_set_mtx) is True
 
-    # 4. Gzipped MTX
     mtx_gz = tmp_path / "mat.mtx.gz"
     create_mtx_file(mtx_gz, 2, 2, [(1, 1, 5)], compress=True)
     source_set_mtx_gz = create_source_set([create_source_file(mtx_gz, ImportFileRole.MATRIX)])
@@ -324,7 +333,6 @@ def test_detect_supported_formats(tmp_path: Path) -> None:
 def test_detect_rejects_unsupported_formats_and_cardinality(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Non-generic format
     csv_file = tmp_path / "mat.csv"
     csv_file.write_text("c,g\n1,2\n", encoding="utf-8")
     non_generic_set = create_source_set(
@@ -333,11 +341,9 @@ def test_detect_rejects_unsupported_formats_and_cardinality(tmp_path: Path) -> N
     )
     assert importer.detect(non_generic_set) is False
 
-    # Disallowed role: PRIMARY instead of MATRIX
     primary_set = create_source_set([create_source_file(csv_file, ImportFileRole.PRIMARY)])
     assert importer.detect(primary_set) is False
 
-    # Disallowed role: BARCODES present
     bc_file = tmp_path / "barcodes.tsv"
     bc_file.write_text("c1\n", encoding="utf-8")
     invalid_roles_set = create_source_set(
@@ -348,7 +354,6 @@ def test_detect_rejects_unsupported_formats_and_cardinality(tmp_path: Path) -> N
     )
     assert importer.detect(invalid_roles_set) is False
 
-    # Multiple MATRIX files
     csv2 = tmp_path / "mat2.csv"
     csv2.write_text("c,g\n1,2\n", encoding="utf-8")
     multi_matrix_set = create_source_set(
@@ -370,12 +375,10 @@ def test_validate_cardinality_violations(tmp_path: Path) -> None:
     f = tmp_path / "mat.csv"
     f.write_text("c,g\n1,2\n", encoding="utf-8")
 
-    # Missing MATRIX
     empty_set = create_source_set([])
     issues = importer.validate(empty_set)
     assert any(iss.code == ScientificIssueCode.MISSING_COMPONENT for iss in issues)
 
-    # Multiple MATRIX
     f2 = tmp_path / "mat2.csv"
     f2.write_text("c,g\n1,2\n", encoding="utf-8")
     multi_set = create_source_set(
@@ -391,14 +394,12 @@ def test_validate_cardinality_violations(tmp_path: Path) -> None:
 def test_validate_non_numeric_and_empty_tables(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Non-numeric values in expression table
     bad_mat = tmp_path / "bad_mat.csv"
     bad_mat.write_text("cell_id,g1,g2\nc1,text,10\n", encoding="utf-8")
     source_set = create_source_set([create_source_file(bad_mat, ImportFileRole.MATRIX)])
     issues = importer.validate(source_set)
     assert any(iss.code == ScientificIssueCode.MALFORMED_INPUT for iss in issues)
 
-    # Single column table (no genes)
     single_col = tmp_path / "single_col.csv"
     single_col.write_text("cell_id\nc1\nc2\n", encoding="utf-8")
     single_set = create_source_set([create_source_file(single_col, ImportFileRole.MATRIX)])
@@ -409,15 +410,7 @@ def test_validate_non_numeric_and_empty_tables(tmp_path: Path) -> None:
 def test_validate_duplicate_authoritative_matrix_ids(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Duplicate row identifiers (column 0)
-    dup_rows = tmp_path / "dup_rows.csv"
-    dup_rows.write_text("cell_id,g1,g2\nc1,10,20\nc1,30,40\n", encoding="utf-8")
-    issues_row = importer.validate(
-        create_source_set([create_source_file(dup_rows, ImportFileRole.MATRIX)])
-    )
-    assert any(iss.code == ScientificIssueCode.DUPLICATE_CELL_IDS for iss in issues_row)
-
-    # Duplicate column identifiers (row 0 header)
+    # Duplicate column identifiers (row 0 header) detected in validate()
     dup_cols = tmp_path / "dup_cols.csv"
     dup_cols.write_text("cell_id,g1,g1\nc1,10,20\nc2,30,40\n", encoding="utf-8")
     issues_col = importer.validate(
@@ -425,25 +418,41 @@ def test_validate_duplicate_authoritative_matrix_ids(tmp_path: Path) -> None:
     )
     assert any(iss.code == ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS for iss in issues_col)
 
+    # Duplicate row identifiers in explicit matrixCellIdColumn rejected in canonicalize()
+    dup_rows = tmp_path / "dup_rows.csv"
+    dup_rows.write_text(
+        "cell_id,ENSG00000124762,ENSG00000142168\nc1,10,20\nc1,30,40\n", encoding="utf-8"
+    )
+    with pytest.raises((CountValidationError, ImporterSecurityError)) as exc_row:
+        importer.canonicalize(
+            source_set=create_source_set([create_source_file(dup_rows, ImportFileRole.MATRIX)]),
+            output_path=str(tmp_path / "out_dup_row.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=make_mapping(
+                orientation=MatrixOrientation.CELLS_BY_GENES,
+                matrix_cell_id_column="cell_id",
+            ),
+        )
+    assert isinstance(exc_row.value, CountValidationError | ImporterSecurityError)
+    assert exc_row.value.issue_code == ScientificIssueCode.DUPLICATE_CELL_IDS
+
 
 def test_validate_raw_counts(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Fractional values (log-normalized / CPM)
     frac_mat = tmp_path / "frac_mat.csv"
     frac_mat.write_text("cell_id,g1,g2\nc1,1.5,2.0\n", encoding="utf-8")
     frac_set = create_source_set([create_source_file(frac_mat, ImportFileRole.MATRIX)])
     issues = importer.validate(frac_set)
     assert any(iss.code == ScientificIssueCode.NON_COUNT_INPUT for iss in issues)
 
-    # Negative values
     neg_mat = tmp_path / "neg_mat.csv"
     neg_mat.write_text("cell_id,g1,g2\nc1,-1,2\n", encoding="utf-8")
     neg_set = create_source_set([create_source_file(neg_mat, ImportFileRole.MATRIX)])
     issues = importer.validate(neg_set)
     assert any(iss.code == ScientificIssueCode.NON_COUNT_INPUT for iss in issues)
 
-    # Ambiguous near-integral values
     ambig_mat = tmp_path / "ambig_mat.csv"
     ambig_val = repr(1.0 + np.finfo(np.float64).eps * 2.0)
     ambig_mat.write_text(f"cell_id,g1,g2\nc1,{ambig_val},2\n", encoding="utf-8")
@@ -484,7 +493,6 @@ def test_inspect_dataset_version_id_missing_fails_closed(tmp_path: Path) -> None
     csv_file = tmp_path / "mat.csv"
     csv_file.write_text("cell_id,g1,g2\nc1,1,2\n", encoding="utf-8")
 
-    # Missing dataset_version_id
     source_set_no_ver = ImportSourceSet(
         source_format=SourceFormat.GENERIC_MATRIX,
         files=(create_source_file(csv_file, ImportFileRole.MATRIX),),
@@ -494,7 +502,6 @@ def test_inspect_dataset_version_id_missing_fails_closed(tmp_path: Path) -> None
         importer.inspect(source_set_no_ver)
     assert exc.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
 
-    # Whitespace only dataset_version_id
     source_set_blank_ver = ImportSourceSet(
         source_format=SourceFormat.GENERIC_MATRIX,
         files=(create_source_file(csv_file, ImportFileRole.MATRIX),),
@@ -534,7 +541,7 @@ def test_inspect_needs_mapping_status_and_metadata_discovery(tmp_path: Path) -> 
 
 
 # =========================================================================
-# 7. INSPECTION STATUS MATRIX
+# 7. INSPECTION STATUS MATRIX (Section 26)
 # =========================================================================
 
 
@@ -565,13 +572,56 @@ def test_inspection_status_matrix(tmp_path: Path) -> None:
     assert res3.status == InspectionStatus.INVALID
     assert res3.requiresMapping is False
 
-    # 4. Duplicate authoritative IDs => INVALID
-    p_dup = tmp_path / "dup.csv"
-    p_dup.write_text("cell_id,g1,g2\nc1,1,2\nc1,3,4\n", encoding="utf-8")
-    res4 = importer.inspect(create_source_set([create_source_file(p_dup, ImportFileRole.MATRIX)]))
+    # 4. Duplicate column headers => INVALID
+    p_dup_hdr = tmp_path / "dup_hdr.csv"
+    p_dup_hdr.write_text("cell_id,g1,g1\nc1,1,2\nc2,3,4\n", encoding="utf-8")
+    res4 = importer.inspect(
+        create_source_set([create_source_file(p_dup_hdr, ImportFileRole.MATRIX)])
+    )
     assert res4.status == InspectionStatus.INVALID
     assert res4.requiresMapping is False
-    assert any(iss.code == ScientificIssueCode.DUPLICATE_CELL_IDS for iss in res4.issues)
+    assert any(iss.code == ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS for iss in res4.issues)
+
+    # 5. Generic MTX missing CELL_METADATA / FEATURE_METADATA / axis mappings => NEEDS_MAPPING
+    mtx_file = tmp_path / "mat.mtx"
+    create_mtx_file(mtx_file, 2, 2, [(1, 1, 10)])
+    res_mtx_no_meta = importer.inspect(
+        create_source_set([create_source_file(mtx_file, ImportFileRole.MATRIX)])
+    )
+    assert res_mtx_no_meta.status == InspectionStatus.NEEDS_MAPPING
+    assert res_mtx_no_meta.requiresMapping is True
+
+    # 6. Generic MTX with malformed / duplicate axis coordinates => INVALID when inspected with mapping
+    cell_meta_dup_coord = tmp_path / "cell_dup_coord.csv"
+    create_csv_matrix(
+        cell_meta_dup_coord,
+        data=[[1, "C1"], [1, "C2"]],
+        headers=["cell_idx", "cell_id"],
+    )
+    feat_meta_valid = tmp_path / "feat_valid.csv"
+    create_csv_matrix(
+        feat_meta_valid,
+        data=[[1, "ENSG00000124762"], [2, "ENSG00000142168"]],
+        headers=["feat_idx", "gene_id"],
+    )
+    res_mtx_bad_coord = importer.inspect(
+        create_source_set(
+            [
+                create_source_file(mtx_file, ImportFileRole.MATRIX),
+                create_source_file(cell_meta_dup_coord, ImportFileRole.CELL_METADATA),
+                create_source_file(feat_meta_valid, ImportFileRole.FEATURE_METADATA),
+            ]
+        ),
+        mapping=make_mapping(
+            orientation=MatrixOrientation.CELLS_BY_GENES,
+            cell_axis_index_column="cell_idx",
+            feature_axis_index_column="feat_idx",
+            cell_id_column="cell_id",
+            gene_id_column="gene_id",
+        ),
+    )
+    assert res_mtx_bad_coord.status == InspectionStatus.INVALID
+    assert res_mtx_bad_coord.requiresMapping is False
 
 
 # =========================================================================
@@ -580,13 +630,7 @@ def test_inspection_status_matrix(tmp_path: Path) -> None:
 
 
 def test_golden_csv_cells_by_genes(tmp_path: Path) -> None:
-    """Non-square 2 cells x 3 genes matrix (CELLS_BY_GENES).
-
-    Matrix:
-             ENSG00000124762  ENSG00000142168  ENSG00000182463
-    cell_A          10               20               30
-    cell_B          40               50               60
-    """
+    """Non-square 2 cells x 3 genes matrix (CELLS_BY_GENES) with explicit matrixCellIdColumn."""
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     csv_file = tmp_path / "counts_cells_by_genes.csv"
     create_csv_matrix(
@@ -601,7 +645,7 @@ def test_golden_csv_cells_by_genes(tmp_path: Path) -> None:
     source_set = create_source_set([create_source_file(csv_file, ImportFileRole.MATRIX)])
     mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
-        cell_id_column="cell_id",
+        matrix_cell_id_column="cell_id",
     )
 
     out_h5ad = tmp_path / "out_cells_by_genes.h5ad"
@@ -637,15 +681,7 @@ def test_golden_csv_cells_by_genes(tmp_path: Path) -> None:
 
 
 def test_golden_csv_genes_by_cells(tmp_path: Path) -> None:
-    """Non-square 3 genes x 2 cells matrix (GENES_BY_CELLS).
-
-    Transpose must yield 2 cells x 3 genes.
-    Source:
-    gene_id          cell_A  cell_B
-    ENSG00000124762    10      40
-    ENSG00000142168    20      50
-    ENSG00000182463    30      60
-    """
+    """Non-square 3 genes x 2 cells matrix (GENES_BY_CELLS) with explicit matrixFeatureIdColumn."""
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     csv_file = tmp_path / "counts_genes_by_cells.csv"
     create_csv_matrix(
@@ -661,7 +697,7 @@ def test_golden_csv_genes_by_cells(tmp_path: Path) -> None:
     source_set = create_source_set([create_source_file(csv_file, ImportFileRole.MATRIX)])
     mapping = make_mapping(
         orientation=MatrixOrientation.GENES_BY_CELLS,
-        gene_id_column="gene_id",
+        matrix_feature_id_column="gene_id",
     )
 
     out_h5ad = tmp_path / "out_genes_by_cells.h5ad"
@@ -685,7 +721,6 @@ def test_golden_csv_genes_by_cells(tmp_path: Path) -> None:
     assert sp.issparse(adata.X)
     assert adata.X.format == "csr"
 
-    # Transposed result should match cell_A: [10, 20, 30], cell_B: [40, 50, 60]
     dense_x = adata.X.toarray()
     expected = np.array([[10, 20, 30], [40, 50, 60]], dtype=np.int32)
     np.testing.assert_array_equal(dense_x, expected)
@@ -705,7 +740,6 @@ def test_golden_csv_genes_by_cells(tmp_path: Path) -> None:
 def test_golden_tsv_plain_and_gzip(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Gzipped TSV
     tsv_gz = tmp_path / "counts.tsv.gz"
     create_csv_matrix(
         tsv_gz,
@@ -722,7 +756,7 @@ def test_golden_tsv_plain_and_gzip(tmp_path: Path) -> None:
     mapping = make_mapping(
         organism=Organism.MOUSE,
         orientation=MatrixOrientation.CELLS_BY_GENES,
-        cell_id_column="cell_id",
+        matrix_cell_id_column="cell_id",
     )
 
     out_h5ad = tmp_path / "out_tsv.h5ad"
@@ -743,12 +777,12 @@ def test_golden_tsv_plain_and_gzip(tmp_path: Path) -> None:
 
 
 # =========================================================================
-# 10. GOLDEN MTX TESTS
+# 10. GOLDEN MTX TESTS & REORDERED MTX METADATA GOLDEN TEST (Section 16)
 # =========================================================================
 
 
 def test_golden_mtx_cells_by_genes(tmp_path: Path) -> None:
-    """Matrix Market 2 cells x 3 genes with external metadata."""
+    """Matrix Market 2 cells x 3 genes with explicit axis coordinates."""
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
     mtx_file = tmp_path / "matrix.mtx"
@@ -767,19 +801,19 @@ def test_golden_mtx_cells_by_genes(tmp_path: Path) -> None:
     cell_meta = tmp_path / "cells.csv"
     create_csv_matrix(
         cell_meta,
-        data=[["C1", "sample_A"], ["C2", "sample_B"]],
-        headers=["cell_id", "sample_source"],
+        data=[[1, "C1", "sample_A"], [2, "C2", "sample_B"]],
+        headers=["mtx_row_idx", "cell_id", "sample_source"],
     )
 
     feat_meta = tmp_path / "genes.csv"
     create_csv_matrix(
         feat_meta,
         data=[
-            ["ENSG00000124762", "CDKN1A"],
-            ["ENSG00000142168", "SOD1"],
-            ["ENSG00000182463", "ACTB"],
+            [1, "ENSG00000124762", "CDKN1A"],
+            [2, "ENSG00000142168", "SOD1"],
+            [3, "ENSG00000182463", "ACTB"],
         ],
-        headers=["gene_id", "symbol"],
+        headers=["mtx_col_idx", "gene_id", "symbol"],
     )
 
     source_set = create_source_set(
@@ -792,6 +826,8 @@ def test_golden_mtx_cells_by_genes(tmp_path: Path) -> None:
 
     mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        cell_axis_index_column="mtx_row_idx",
+        feature_axis_index_column="mtx_col_idx",
         cell_id_column="cell_id",
         gene_id_column="gene_id",
         gene_symbol_column="symbol",
@@ -819,6 +855,8 @@ def test_golden_mtx_cells_by_genes(tmp_path: Path) -> None:
     assert list(adata.var_names) == ["ENSG00000124762", "ENSG00000142168", "ENSG00000182463"]
     assert list(adata.obs["sample_key"]) == ["SMP-001", "SMP-002"]
     assert list(adata.var["gene_symbol"]) == ["CDKN1A", "SOD1", "ACTB"]
+    assert "mtx_row_idx" not in adata.obs.columns
+    assert "mtx_col_idx" not in adata.var.columns
 
     dense_x = adata.X.toarray()
     expected = np.array([[10, 0, 30], [0, 50, 60]], dtype=np.int32)
@@ -826,7 +864,7 @@ def test_golden_mtx_cells_by_genes(tmp_path: Path) -> None:
 
 
 def test_golden_mtx_genes_by_cells(tmp_path: Path) -> None:
-    """Matrix Market 3 rows (genes) x 2 cols (cells) with transpose."""
+    """Matrix Market 3 rows (genes) x 2 cols (cells) with transpose and explicit axis coordinates."""
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
     mtx_file = tmp_path / "matrix_gc.mtx.gz"
@@ -846,19 +884,19 @@ def test_golden_mtx_genes_by_cells(tmp_path: Path) -> None:
     cell_meta = tmp_path / "cells.csv"
     create_csv_matrix(
         cell_meta,
-        data=[["C1"], ["C2"]],
-        headers=["cell_id"],
+        data=[[1, "C1"], [2, "C2"]],
+        headers=["mtx_col_idx", "cell_id"],
     )
 
     feat_meta = tmp_path / "genes.csv"
     create_csv_matrix(
         feat_meta,
         data=[
-            ["ENSG00000124762"],
-            ["ENSG00000142168"],
-            ["ENSG00000182463"],
+            [1, "ENSG00000124762"],
+            [2, "ENSG00000142168"],
+            [3, "ENSG00000182463"],
         ],
-        headers=["gene_id"],
+        headers=["mtx_row_idx", "gene_id"],
     )
 
     source_set = create_source_set(
@@ -871,6 +909,8 @@ def test_golden_mtx_genes_by_cells(tmp_path: Path) -> None:
 
     mapping = make_mapping(
         orientation=MatrixOrientation.GENES_BY_CELLS,
+        cell_axis_index_column="mtx_col_idx",
+        feature_axis_index_column="mtx_row_idx",
         cell_id_column="cell_id",
         gene_id_column="gene_id",
     )
@@ -896,7 +936,102 @@ def test_golden_mtx_genes_by_cells(tmp_path: Path) -> None:
     np.testing.assert_array_equal(dense_x, expected)
 
 
-def test_mtx_without_metadata_fails_closed(tmp_path: Path) -> None:
+def test_reordered_mtx_metadata_golden(tmp_path: Path) -> None:
+    """Section 16 Mandatory Golden Test: Non-square 3 features x 2 cells MTX (GENES_BY_CELLS)
+    with deliberately reordered CELL_METADATA and FEATURE_METADATA.
+
+    CELL_METADATA:
+      2,CELL_B
+      1,CELL_A
+    FEATURE_METADATA:
+      3,probe_gamma,ENSG00000182463,ACTB
+      1,probe_alpha,ENSG00000124762,CDKN1A
+      2,probe_beta,ENSG00000142168,SOD1
+    """
+    importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
+
+    # 3 features (rows 1..3) x 2 cells (cols 1..2)
+    # Row 1 (probe_alpha / ENSG00000124762): col 1 (CELL_A)=11, col 2 (CELL_B)=12
+    # Row 2 (probe_beta  / ENSG00000142168): col 1 (CELL_A)=21, col 2 (CELL_B)=22
+    # Row 3 (probe_gamma / ENSG00000182463): col 1 (CELL_A)=31, col 2 (CELL_B)=32
+    mtx_file = tmp_path / "reordered_golden.mtx"
+    create_mtx_file(
+        mtx_file,
+        n_rows=3,
+        n_cols=2,
+        entries=[
+            (1, 1, 11),
+            (1, 2, 12),
+            (2, 1, 21),
+            (2, 2, 22),
+            (3, 1, 31),
+            (3, 2, 32),
+        ],
+    )
+
+    cell_meta = tmp_path / "cell_meta_reordered.csv"
+    create_csv_matrix(
+        cell_meta,
+        data=[
+            [2, "CELL_B"],
+            [1, "CELL_A"],
+        ],
+        headers=["matrix_cell_index", "cell_id"],
+    )
+
+    feat_meta = tmp_path / "feat_meta_reordered.csv"
+    create_csv_matrix(
+        feat_meta,
+        data=[
+            [3, "probe_gamma", "ENSG00000182463", "ACTB"],
+            [1, "probe_alpha", "ENSG00000124762", "CDKN1A"],
+            [2, "probe_beta", "ENSG00000142168", "SOD1"],
+        ],
+        headers=["matrix_feature_index", "probe_label", "stable_gene_id", "gene_symbol"],
+    )
+
+    source_set = create_source_set(
+        [
+            create_source_file(mtx_file, ImportFileRole.MATRIX),
+            create_source_file(cell_meta, ImportFileRole.CELL_METADATA),
+            create_source_file(feat_meta, ImportFileRole.FEATURE_METADATA),
+        ]
+    )
+
+    mapping = make_mapping(
+        orientation=MatrixOrientation.GENES_BY_CELLS,
+        cell_axis_index_column="matrix_cell_index",
+        feature_axis_index_column="matrix_feature_index",
+        cell_id_column="cell_id",
+        feature_metadata_join_column="probe_label",
+        gene_id_column="stable_gene_id",
+        gene_symbol_column="gene_symbol",
+    )
+
+    out_h5ad = tmp_path / "out_reordered_mtx_golden.h5ad"
+    importer.canonicalize(
+        source_set=source_set,
+        output_path=str(out_h5ad),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        mapping=mapping,
+    )
+
+    adata = ad.read_h5ad(out_h5ad)
+    assert list(adata.obs_names) == ["CELL_A", "CELL_B"]
+    assert list(adata.var_names) == ["ENSG00000124762", "ENSG00000142168", "ENSG00000182463"]
+    assert list(adata.var["source_feature_id"]) == ["probe_alpha", "probe_beta", "probe_gamma"]
+    assert list(adata.var["gene_symbol"]) == ["CDKN1A", "SOD1", "ACTB"]
+    assert "matrix_cell_index" not in adata.obs.columns
+    assert "matrix_feature_index" not in adata.var.columns
+
+    # Canonical shape is 2 cells x 3 features:
+    # CELL_A: [11, 21, 31], CELL_B: [12, 22, 32]
+    expected_x = np.array([[11, 21, 31], [12, 22, 32]], dtype=np.int32)
+    np.testing.assert_array_equal(adata.X.toarray(), expected_x)
+
+
+def test_mtx_without_metadata_or_axis_columns_fails_closed(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     mtx_file = tmp_path / "matrix.mtx"
     create_mtx_file(mtx_file, 2, 2, [(1, 1, 5)])
@@ -917,12 +1052,324 @@ def test_mtx_without_metadata_fails_closed(tmp_path: Path) -> None:
 
 
 # =========================================================================
-# 11. FEATURE METADATA JOIN TEST MATRIX (A-E)
+# 11. MTX AXIS ERROR TESTS (Section 17) & ROW-ORDER INDEPENDENCE (Section 18)
+# =========================================================================
+
+
+@pytest.mark.parametrize(
+    "bad_coords",
+    [
+        ["0", "1"],  # zero
+        ["-1", "2"],  # negative
+        ["1.5", "2"],  # fractional
+        ["1", "1"],  # duplicate
+        ["1"],  # missing index (only 1 of 2)
+        ["1", "3"],  # gap / out-of-range for n=2
+        ["1", "2", "3"],  # extra / out-of-range coordinate
+        ["abc", "2"],  # non-numeric
+        ["", "2"],  # blank/null
+    ],
+)
+def test_mtx_axis_error_cases_both_cell_and_feature(tmp_path: Path, bad_coords: list[str]) -> None:
+    """Section 17: Test zero, negative, fractional, duplicate, missing, gap,
+    out-of-range, non-numeric, and blank/null for BOTH cellAxisIndexColumn and featureAxisIndexColumn.
+    All must fail closed.
+    """
+    importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
+    mtx_file = tmp_path / "mtx_2x2.mtx"
+    create_mtx_file(mtx_file, 2, 2, [(1, 1, 10), (2, 2, 20)])
+
+    valid_cells = tmp_path / "valid_cells.csv"
+    create_csv_matrix(
+        valid_cells,
+        data=[["1", "C1"], ["2", "C2"]],
+        headers=["cell_idx", "cell_id"],
+    )
+    valid_feats = tmp_path / "valid_feats.csv"
+    create_csv_matrix(
+        valid_feats,
+        data=[["1", "ENSG00000124762"], ["2", "ENSG00000142168"]],
+        headers=["feat_idx", "gene_id"],
+    )
+
+    mapping = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        cell_axis_index_column="cell_idx",
+        feature_axis_index_column="feat_idx",
+        cell_id_column="cell_id",
+        gene_id_column="gene_id",
+    )
+
+    # 1. Bad cellAxisIndexColumn
+    bad_cells = tmp_path / "bad_cells.csv"
+    bad_cell_rows = [[c, f"C_{i}"] for i, c in enumerate(bad_coords)]
+    create_csv_matrix(bad_cells, data=bad_cell_rows, headers=["cell_idx", "cell_id"])
+    src_bad_cell = create_source_set(
+        [
+            create_source_file(mtx_file, ImportFileRole.MATRIX),
+            create_source_file(bad_cells, ImportFileRole.CELL_METADATA),
+            create_source_file(valid_feats, ImportFileRole.FEATURE_METADATA),
+        ]
+    )
+    with pytest.raises((CountValidationError, ImporterSecurityError)):
+        importer.canonicalize(
+            source_set=src_bad_cell,
+            output_path=str(tmp_path / "fail_cell_axis.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+
+    # 2. Bad featureAxisIndexColumn
+    bad_feats = tmp_path / "bad_feats.csv"
+    ensembl_pool = ["ENSG00000124762", "ENSG00000142168", "ENSG00000182463"]
+    bad_feat_rows = [[c, ensembl_pool[i]] for i, c in enumerate(bad_coords)]
+    create_csv_matrix(bad_feats, data=bad_feat_rows, headers=["feat_idx", "gene_id"])
+    src_bad_feat = create_source_set(
+        [
+            create_source_file(mtx_file, ImportFileRole.MATRIX),
+            create_source_file(valid_cells, ImportFileRole.CELL_METADATA),
+            create_source_file(bad_feats, ImportFileRole.FEATURE_METADATA),
+        ]
+    )
+    with pytest.raises((CountValidationError, ImporterSecurityError)):
+        importer.canonicalize(
+            source_set=src_bad_feat,
+            output_path=str(tmp_path / "fail_feat_axis.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+
+
+def test_mtx_row_order_independence(tmp_path: Path) -> None:
+    """Section 18: Arbitrarily reorder CELL_METADATA and FEATURE_METADATA rows multiple ways;
+    canonical output must remain identical in obs_names, var_names, source_feature_id, and matrix coordinates.
+    """
+    importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
+
+    mtx_file = tmp_path / "mtx_3x3.mtx"
+    create_mtx_file(
+        mtx_file,
+        n_rows=3,
+        n_cols=3,
+        entries=[
+            (1, 1, 11),
+            (1, 2, 12),
+            (2, 3, 23),
+            (3, 1, 31),
+            (3, 3, 33),
+        ],
+    )
+
+    cell_rows = [
+        [1, "CELL_1", "cond_1"],
+        [2, "CELL_2", "cond_2"],
+        [3, "CELL_3", "cond_3"],
+    ]
+    feat_rows = [
+        [1, "p1", "ENSG00000124762", "CDKN1A"],
+        [2, "p2", "ENSG00000142168", "SOD1"],
+        [3, "p3", "ENSG00000182463", "ACTB"],
+    ]
+
+    permutations = [
+        ([0, 1, 2], [0, 1, 2]),
+        ([2, 0, 1], [1, 2, 0]),
+        ([1, 2, 0], [2, 1, 0]),
+    ]
+
+    mapping = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        cell_axis_index_column="cell_idx",
+        feature_axis_index_column="feat_idx",
+        cell_id_column="cell_id",
+        feature_metadata_join_column="probe_id",
+        gene_id_column="gene_id",
+        gene_symbol_column="symbol",
+        condition_column="cond",
+    )
+
+    baseline_adata: Any = None
+    for idx, (c_perm, f_perm) in enumerate(permutations):
+        c_file = tmp_path / f"cells_perm_{idx}.csv"
+        f_file = tmp_path / f"feats_perm_{idx}.csv"
+        create_csv_matrix(
+            c_file,
+            data=[cell_rows[i] for i in c_perm],
+            headers=["cell_idx", "cell_id", "cond"],
+        )
+        create_csv_matrix(
+            f_file,
+            data=[feat_rows[i] for i in f_perm],
+            headers=["feat_idx", "probe_id", "gene_id", "symbol"],
+        )
+        src = create_source_set(
+            [
+                create_source_file(mtx_file, ImportFileRole.MATRIX),
+                create_source_file(c_file, ImportFileRole.CELL_METADATA),
+                create_source_file(f_file, ImportFileRole.FEATURE_METADATA),
+            ]
+        )
+        out_path = tmp_path / f"out_perm_{idx}.h5ad"
+        importer.canonicalize(
+            source_set=src,
+            output_path=str(out_path),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+        adata = ad.read_h5ad(out_path)
+        if baseline_adata is None:
+            baseline_adata = adata
+        else:
+            assert list(adata.obs_names) == list(baseline_adata.obs_names)
+            assert list(adata.var_names) == list(baseline_adata.var_names)
+            assert list(adata.var["source_feature_id"]) == list(
+                baseline_adata.var["source_feature_id"]
+            )
+            assert list(adata.var["gene_symbol"]) == list(baseline_adata.var["gene_symbol"])
+            assert list(adata.obs["condition"]) == list(baseline_adata.obs["condition"])
+            np.testing.assert_array_equal(adata.X.toarray(), baseline_adata.X.toarray())
+
+
+# =========================================================================
+# 12. CSV MISLEADING-FIRST-COLUMN (Section 19) & GENES_BY_CELLS FEATURE ROW (Section 20)
+# =========================================================================
+
+
+def test_csv_misleading_first_column_regression(tmp_path: Path) -> None:
+    """Section 19:
+    batch,ENSG00000124762,ENSG00000142168
+    A,10,20
+    B,30,40
+
+    Without matrixCellIdColumn = 'batch', do NOT treat A/B as cell IDs:
+    - inspect(): NEEDS_MAPPING
+    - canonicalize(): MISSING_REQUIRED_METADATA
+    With explicit matrixCellIdColumn = 'batch':
+    - A/B become source cell IDs by explicit user authority.
+    """
+    importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
+    csv_file = tmp_path / "misleading_batch.csv"
+    csv_file.write_text(
+        "batch,ENSG00000124762,ENSG00000142168\nA,10,20\nB,30,40\n", encoding="utf-8"
+    )
+    source_set = create_source_set([create_source_file(csv_file, ImportFileRole.MATRIX)])
+
+    insp = importer.inspect(source_set)
+    assert insp.status == InspectionStatus.NEEDS_MAPPING
+    assert insp.requiresMapping is True
+
+    # Without matrixCellIdColumn -> fails closed with MISSING_REQUIRED_METADATA
+    with pytest.raises(ImporterSecurityError) as exc:
+        importer.canonicalize(
+            source_set=source_set,
+            output_path=str(tmp_path / "fail_no_matrix_cell_col.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES),
+        )
+    assert exc.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+    # With explicit matrixCellIdColumn = "batch" -> succeeds by explicit user authority
+    out_ok = tmp_path / "explicit_batch_as_cell.h5ad"
+    importer.canonicalize(
+        source_set=source_set,
+        output_path=str(out_ok),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        mapping=make_mapping(
+            orientation=MatrixOrientation.CELLS_BY_GENES,
+            matrix_cell_id_column="batch",
+        ),
+    )
+    adata = ad.read_h5ad(out_ok)
+    assert list(adata.obs_names) == ["A", "B"]
+    assert list(adata.var_names) == ["ENSG00000124762", "ENSG00000142168"]
+
+
+def test_genes_by_cells_explicit_feature_row(tmp_path: Path) -> None:
+    """Section 20:
+    probe_label,CELL_A,CELL_B
+    probe_1,10,20
+    probe_2,30,40
+
+    Require matrixFeatureIdColumn = 'probe_label'.
+    Without it: NEEDS_MAPPING / MISSING_REQUIRED_METADATA.
+    With it + FEATURE_METADATA mapping probe_1/probe_2 to stable IDs: canonical var_names use stable IDs.
+    """
+    importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
+    csv_file = tmp_path / "probes_by_cells.csv"
+    csv_file.write_text(
+        "probe_label,CELL_A,CELL_B\nprobe_1,10,20\nprobe_2,30,40\n", encoding="utf-8"
+    )
+
+    feat_meta = tmp_path / "probe_meta.csv"
+    create_csv_matrix(
+        feat_meta,
+        data=[
+            ["probe_1", "ENSG00000124762", "CDKN1A"],
+            ["probe_2", "ENSG00000142168", "SOD1"],
+        ],
+        headers=["probe_key", "ensembl_id", "symbol"],
+    )
+
+    source_set = create_source_set(
+        [
+            create_source_file(csv_file, ImportFileRole.MATRIX),
+            create_source_file(feat_meta, ImportFileRole.FEATURE_METADATA),
+        ]
+    )
+
+    insp = importer.inspect(source_set)
+    assert insp.status == InspectionStatus.NEEDS_MAPPING
+
+    # Without matrixFeatureIdColumn -> fails closed
+    with pytest.raises(ImporterSecurityError) as exc:
+        importer.canonicalize(
+            source_set=source_set,
+            output_path=str(tmp_path / "fail_no_feat_col.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=make_mapping(
+                orientation=MatrixOrientation.GENES_BY_CELLS,
+                feature_metadata_join_column="probe_key",
+                gene_id_column="ensembl_id",
+            ),
+        )
+    assert exc.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+    # With explicit matrixFeatureIdColumn = "probe_label" -> succeeds
+    out_ok = tmp_path / "probes_resolved.h5ad"
+    importer.canonicalize(
+        source_set=source_set,
+        output_path=str(out_ok),
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        mapping=make_mapping(
+            orientation=MatrixOrientation.GENES_BY_CELLS,
+            matrix_feature_id_column="probe_label",
+            feature_metadata_join_column="probe_key",
+            gene_id_column="ensembl_id",
+            gene_symbol_column="symbol",
+        ),
+    )
+    adata = ad.read_h5ad(out_ok)
+    assert list(adata.obs_names) == ["CELL_A", "CELL_B"]
+    assert list(adata.var_names) == ["ENSG00000124762", "ENSG00000142168"]
+    assert list(adata.var["source_feature_id"]) == ["probe_1", "probe_2"]
+    assert list(adata.var["gene_symbol"]) == ["CDKN1A", "SOD1"]
+    np.testing.assert_array_equal(adata.X.toarray(), np.array([[10, 30], [20, 40]]))
+
+
+# =========================================================================
+# 13. FEATURE METADATA JOIN TEST MATRIX (A-E)
 # =========================================================================
 
 
 def test_feature_metadata_join_matrix_cases(tmp_path: Path) -> None:
-    """Test full matrix of FEATURE_METADATA joining policies:
+    """Test full matrix of FEATURE_METADATA joining policies using explicit featureMetadataJoinColumn:
 
     A. Perfect same-order identity match
     B. Reordered relative to matrix => deterministic realignment
@@ -946,7 +1393,7 @@ def test_feature_metadata_join_matrix_cases(tmp_path: Path) -> None:
         data=[
             ["probe_1", "ENSG00000124762", "CDKN1A"],
             ["probe_2", "ENSG00000142168", "SOD1"],
-            ["probe_unrelated", "ENSG00000999999", "EXTRA"],  # Extra unreferenced row
+            ["probe_unrelated", "ENSG00000999999", "EXTRA"],
         ],
         headers=["probe_id", "ensembl_id", "symbol"],
     )
@@ -959,6 +1406,8 @@ def test_feature_metadata_join_matrix_cases(tmp_path: Path) -> None:
     )
     mapping_extra = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        feature_metadata_join_column="probe_id",
         gene_id_column="ensembl_id",
         gene_symbol_column="symbol",
     )
@@ -1000,7 +1449,6 @@ def test_feature_metadata_join_matrix_cases(tmp_path: Path) -> None:
         mapping=mapping_extra,
     )
     adata_reord = ad.read_h5ad(out_reord)
-    # Alignment strictly matches matrix columns order [probe_1, probe_2]
     assert list(adata_reord.var_names) == ["ENSG00000124762", "ENSG00000142168"]
     assert list(adata_reord.var["gene_symbol"]) == ["CDKN1A", "SOD1"]
 
@@ -1010,7 +1458,7 @@ def test_feature_metadata_join_matrix_cases(tmp_path: Path) -> None:
         feat_meta_dup,
         data=[
             ["probe_1", "ENSG00000124762", "CDKN1A"],
-            ["probe_1", "ENSG00000142168", "SOD1"],  # Duplicate probe_1
+            ["probe_1", "ENSG00000142168", "SOD1"],
         ],
         headers=["probe_id", "ensembl_id", "symbol"],
     )
@@ -1037,7 +1485,6 @@ def test_feature_metadata_join_matrix_cases(tmp_path: Path) -> None:
         feat_meta_missing,
         data=[
             ["probe_1", "ENSG00000124762", "CDKN1A"],
-            # probe_2 missing!
         ],
         headers=["probe_id", "ensembl_id", "symbol"],
     )
@@ -1059,18 +1506,19 @@ def test_feature_metadata_join_matrix_cases(tmp_path: Path) -> None:
 
 
 # =========================================================================
-# 12. CELL METADATA JOIN TEST MATRIX (A-E)
+# 14. CELL METADATA JOIN TEST MATRIX (A-E)
 # =========================================================================
 
 
 def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
-    """Test full matrix of CELL_METADATA joining policies:
+    """Test full matrix of CELL_METADATA joining policies using explicit cellMetadataJoinColumn:
 
     A. Perfect same-order identity match
     B. Reordered relative to matrix => deterministic realignment
     C. Duplicate cell key => reject (DUPLICATE_CELL_IDS)
     D. Missing matrix cell => reject (MISSING_REQUIRED_METADATA)
-    E. Extra unrelated metadata row => extra row ignored, matrix cells resolve.
+    E. Extra unrelated metadata row => extra row ignored, matrix cells resolve
+    F. Translated canonical cellIdColumn distinct from cellMetadataJoinColumn.
     """
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
@@ -1084,16 +1532,16 @@ def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
         headers=["cell_id", "ENSG00000124762", "ENSG00000142168"],
     )
 
-    # A & E: Extra rows and same order
+    # A, E & F: Extra rows, same order, and translated canonical cellIdColumn
     cell_meta_extra = tmp_path / "cells_extra.csv"
     create_csv_matrix(
         cell_meta_extra,
         data=[
-            ["cell_A", "cond_A"],
-            ["cell_B", "cond_B"],
-            ["cell_unrelated", "cond_X"],  # Extra unreferenced row
+            ["cell_A", "CANON_CELL_A", "cond_A"],
+            ["cell_B", "CANON_CELL_B", "cond_B"],
+            ["cell_unrelated", "CANON_CELL_X", "cond_X"],
         ],
-        headers=["cell_id", "cond"],
+        headers=["cell_id", "canonical_id", "cond"],
     )
     src_extra = create_source_set(
         [
@@ -1103,7 +1551,9 @@ def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
     )
     mapping_extra = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
-        cell_id_column="cell_id",
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
+        cell_id_column="canonical_id",
         condition_column="cond",
     )
     out_extra = tmp_path / "out_cell_extra.h5ad"
@@ -1115,10 +1565,10 @@ def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
         mapping=mapping_extra,
     )
     adata_extra = ad.read_h5ad(out_extra)
-    assert list(adata_extra.obs_names) == ["cell_A", "cell_B"]
+    assert list(adata_extra.obs_names) == ["CANON_CELL_A", "CANON_CELL_B"]
     assert list(adata_extra.obs["condition"]) == ["cond_A", "cond_B"]
 
-    # B: Reordered metadata relative to matrix
+    # B: Reordered metadata relative to matrix (with omitted cellIdColumn -> keeps source tokens)
     cell_meta_reordered = tmp_path / "cells_reordered.csv"
     create_csv_matrix(
         cell_meta_reordered,
@@ -1134,16 +1584,21 @@ def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
             create_source_file(cell_meta_reordered, ImportFileRole.CELL_METADATA),
         ]
     )
+    mapping_reord = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
+        condition_column="cond",
+    )
     out_reord = tmp_path / "out_cell_reord.h5ad"
     importer.canonicalize(
         source_set=src_reord,
         output_path=str(out_reord),
         organism=Organism.HUMAN,
         gene_id_scheme=GeneIdScheme.ENSEMBL,
-        mapping=mapping_extra,
+        mapping=mapping_reord,
     )
     adata_reord = ad.read_h5ad(out_reord)
-    # Alignment matches matrix rows order [cell_A, cell_B]
     assert list(adata_reord.obs_names) == ["cell_A", "cell_B"]
     assert list(adata_reord.obs["condition"]) == ["cond_A", "cond_B"]
 
@@ -1169,7 +1624,7 @@ def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
             output_path=str(tmp_path / "out_fail.h5ad"),
             organism=Organism.HUMAN,
             gene_id_scheme=GeneIdScheme.ENSEMBL,
-            mapping=mapping_extra,
+            mapping=mapping_reord,
         )
     assert isinstance(exc_dup.value, CountValidationError | ImporterSecurityError)
     assert exc_dup.value.issue_code == ScientificIssueCode.DUPLICATE_CELL_IDS
@@ -1180,7 +1635,6 @@ def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
         cell_meta_missing,
         data=[
             ["cell_A", "cond_A"],
-            # cell_B missing!
         ],
         headers=["cell_id", "cond"],
     )
@@ -1196,13 +1650,13 @@ def test_cell_metadata_join_matrix_cases(tmp_path: Path) -> None:
             output_path=str(tmp_path / "out_fail.h5ad"),
             organism=Organism.HUMAN,
             gene_id_scheme=GeneIdScheme.ENSEMBL,
-            mapping=mapping_extra,
+            mapping=mapping_reord,
         )
     assert exc_miss.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
 
 
 # =========================================================================
-# 13. STRICT SAMPLE MAPPING AUTHORITY
+# 15. STRICT SAMPLE MAPPING AUTHORITY
 # =========================================================================
 
 
@@ -1232,6 +1686,8 @@ def test_sample_mapping_strict_authority_and_no_passthrough(tmp_path: Path) -> N
     # 1. sampleColumn provided without sampleMappings: FAIL CLOSED
     mapping_no_entries = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
         sample_column="sample_col",
     )
     out_h5ad = tmp_path / "out_sample.h5ad"
@@ -1248,6 +1704,8 @@ def test_sample_mapping_strict_authority_and_no_passthrough(tmp_path: Path) -> N
     # 2. Incomplete sample mapping: c2's sample has no entry: FAIL CLOSED
     mapping_partial = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
         sample_column="sample_col",
         sample_mappings=[
             SampleMappingEntry(sourceValue="source_sample_X", sampleKey="SMP-001"),
@@ -1266,6 +1724,8 @@ def test_sample_mapping_strict_authority_and_no_passthrough(tmp_path: Path) -> N
     # 3. Complete approved sample mapping: SUCCESS
     mapping_complete = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
         sample_column="sample_col",
         sample_mappings=[
             SampleMappingEntry(sourceValue="source_sample_X", sampleKey="SMP-001"),
@@ -1306,6 +1766,8 @@ def test_sample_mappings_without_sample_column_fails_closed(tmp_path: Path) -> N
 
     mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
         sample_column=None,
         sample_mappings=[SampleMappingEntry(sourceValue="s1", sampleKey="SMP-1")],
     )
@@ -1322,7 +1784,7 @@ def test_sample_mappings_without_sample_column_fails_closed(tmp_path: Path) -> N
 
 
 # =========================================================================
-# 14. BIOLOGICAL ANNOTATIONS & CANONICAL OBS SCHEMA TESTS
+# 16. BIOLOGICAL ANNOTATIONS & CANONICAL OBS SCHEMA TESTS
 # =========================================================================
 
 
@@ -1361,6 +1823,8 @@ def test_canonical_obs_schema_complete_and_minimal(tmp_path: Path) -> None:
     # 1. Complete mapping: assert exact columns
     mapping_complete = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
         sample_column="sample_col",
         sample_mappings=[SampleMappingEntry(sourceValue="s1", sampleKey="SMP-001")],
         condition_column="cond_col",
@@ -1390,7 +1854,7 @@ def test_canonical_obs_schema_complete_and_minimal(tmp_path: Path) -> None:
     # 2. Minimal mapping: zero optional columns
     mapping_minimal = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
-        cell_id_column="cell_id",
+        matrix_cell_id_column="cell_id",
     )
     out_minimal = tmp_path / "out_minimal.h5ad"
     importer.canonicalize(
@@ -1405,17 +1869,12 @@ def test_canonical_obs_schema_complete_and_minimal(tmp_path: Path) -> None:
 
 
 # =========================================================================
-# 15. CANONICAL VAR SCHEMA & STABLE ID + DUPLICATE SYMBOLS TEST
+# 17. CANONICAL VAR SCHEMA & STABLE ID + DUPLICATE SYMBOLS TEST
 # =========================================================================
 
 
 def test_stable_id_with_duplicate_symbols_valid(tmp_path: Path) -> None:
-    """Proves duplicate symbols are valid when stable canonical IDs are unique:
-
-    source_feature_id: feature_a, feature_b
-    geneIdColumn: ENSG00000124762, ENSG00000142168
-    geneSymbolColumn: DUP, DUP
-    """
+    """Proves duplicate symbols are valid when stable canonical IDs are unique."""
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     mat_file = tmp_path / "mat.csv"
     create_csv_matrix(
@@ -1429,7 +1888,7 @@ def test_stable_id_with_duplicate_symbols_valid(tmp_path: Path) -> None:
         feat_meta,
         data=[
             ["feature_a", "ENSG00000124762", "DUP"],
-            ["feature_b", "ENSG00000142168", "DUP"],  # Duplicate symbol, unique stable ID
+            ["feature_b", "ENSG00000142168", "DUP"],
         ],
         headers=["src_id", "stable_id", "symbol"],
     )
@@ -1443,6 +1902,8 @@ def test_stable_id_with_duplicate_symbols_valid(tmp_path: Path) -> None:
 
     mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        feature_metadata_join_column="src_id",
         gene_id_column="stable_id",
         gene_symbol_column="symbol",
     )
@@ -1473,7 +1934,10 @@ def test_canonical_var_schema_controlled(tmp_path: Path) -> None:
         headers=["cell_id", "ENSG00000124762", "ENSG00000142168"],
     )
     source_set = create_source_set([create_source_file(mat_file, ImportFileRole.MATRIX)])
-    mapping = make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES)
+    mapping = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+    )
     out_h5ad = tmp_path / "out_no_symbol.h5ad"
 
     importer.canonicalize(
@@ -1501,6 +1965,7 @@ def test_symbol_only_scheme_and_duplicate_symbols_fails_closed(tmp_path: Path) -
     source_set = create_source_set([create_source_file(mat_file, ImportFileRole.MATRIX)])
     mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
         gene_id_scheme=GeneIdScheme.SYMBOL,
     )
     out_h5ad = tmp_path / "out_sym.h5ad"
@@ -1534,14 +1999,13 @@ def test_symbol_only_scheme_and_duplicate_symbols_fails_closed(tmp_path: Path) -
 
 
 # =========================================================================
-# 16. ORGANISM, GENE SCHEME & REFERENCE BUILD RESOLUTION
+# 18. ORGANISM, GENE SCHEME & REFERENCE BUILD RESOLUTION
 # =========================================================================
 
 
 def test_organism_resolution_policy_step_d(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # 100% Human Ensembl IDs => HUMAN candidate
     mat_h = tmp_path / "human.csv"
     create_csv_matrix(
         mat_h, data=[["c1", 10, 20]], headers=["cell_id", "ENSG00000124762", "ENSG00000142168"]
@@ -1550,7 +2014,6 @@ def test_organism_resolution_policy_step_d(tmp_path: Path) -> None:
     assert res_h.detectedOrganism == Organism.HUMAN
     assert res_h.detectedGeneIdScheme == GeneIdScheme.ENSEMBL
 
-    # 100% Mouse Ensembl IDs => MOUSE candidate
     mat_m = tmp_path / "mouse.csv"
     create_csv_matrix(
         mat_m,
@@ -1561,7 +2024,6 @@ def test_organism_resolution_policy_step_d(tmp_path: Path) -> None:
     assert res_m.detectedOrganism == Organism.MOUSE
     assert res_m.detectedGeneIdScheme == GeneIdScheme.ENSEMBL
 
-    # Human + Mouse mixture => conflict / INVALID
     mat_mix = tmp_path / "mix.csv"
     create_csv_matrix(
         mat_mix, data=[["c1", 10, 20]], headers=["cell_id", "ENSG00000124762", "ENSMUSG00000024046"]
@@ -1572,7 +2034,6 @@ def test_organism_resolution_policy_step_d(tmp_path: Path) -> None:
     assert res_mix.status == InspectionStatus.INVALID
     assert any(iss.code == ScientificIssueCode.UNRESOLVED_SPECIES for iss in res_mix.issues)
 
-    # Symbol-only => None (no organism inference)
     mat_sym = tmp_path / "symbols.csv"
     create_csv_matrix(mat_sym, data=[["c1", 10, 20]], headers=["cell_id", "CDKN1A", "ACTB"])
     res_sym = importer.inspect(
@@ -1590,9 +2051,9 @@ def test_reference_build_preservation(tmp_path: Path) -> None:
     )
     source_set = create_source_set([create_source_file(mat_file, ImportFileRole.MATRIX)])
 
-    # 1. Explicit reference build preserved
     mapping_with_ref = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
         reference_build="GRCh38.p14",
     )
     out_ref = tmp_path / "out_ref.h5ad"
@@ -1607,8 +2068,10 @@ def test_reference_build_preservation(tmp_path: Path) -> None:
     adata_ref = ad.read_h5ad(out_ref)
     assert adata_ref.uns["reference_build"] == "GRCh38.p14"
 
-    # 2. Missing reference build remains None (never guessed)
-    mapping_no_ref = make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES)
+    mapping_no_ref = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+    )
     out_noref = tmp_path / "out_noref.h5ad"
     res2 = importer.canonicalize(
         source_set=source_set,
@@ -1623,7 +2086,7 @@ def test_reference_build_preservation(tmp_path: Path) -> None:
 
 
 # =========================================================================
-# 17. RAW COUNT STRICTNESS
+# 19. RAW COUNT STRICTNESS & POLICY B SLOT HYGIENE
 # =========================================================================
 
 
@@ -1636,7 +2099,10 @@ def test_integral_floats_accepted(tmp_path: Path) -> None:
         headers=["cell_id", "ENSG00000124762", "ENSG00000142168"],
     )
     source_set = create_source_set([create_source_file(mat_file, ImportFileRole.MATRIX)])
-    mapping = make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES)
+    mapping = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+    )
     out_h5ad = tmp_path / "out_float.h5ad"
 
     importer.canonicalize(
@@ -1651,11 +2117,6 @@ def test_integral_floats_accepted(tmp_path: Path) -> None:
     np.testing.assert_array_equal(adata.X.toarray(), np.array([[10, 20]]))
 
 
-# =========================================================================
-# 18. POLICY B OUTPUT & SLOT HYGIENE
-# =========================================================================
-
-
 def test_slot_hygiene_and_uns_provenance(tmp_path: Path) -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     mat_file = tmp_path / "mat.csv"
@@ -1665,7 +2126,10 @@ def test_slot_hygiene_and_uns_provenance(tmp_path: Path) -> None:
         headers=["cell_id", "ENSG00000124762", "ENSG00000142168"],
     )
     source_set = create_source_set([create_source_file(mat_file, ImportFileRole.MATRIX)])
-    mapping = make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES)
+    mapping = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+    )
     out_h5ad = tmp_path / "out_hygiene.h5ad"
 
     importer.canonicalize(
@@ -1691,7 +2155,7 @@ def test_slot_hygiene_and_uns_provenance(tmp_path: Path) -> None:
 
 
 # =========================================================================
-# 19. SOURCE IMMUTABILITY & PATH COLLISION SAFETY
+# 20. SOURCE IMMUTABILITY, PATH COLLISION SAFETY & EXACT ROUND-TRIP
 # =========================================================================
 
 
@@ -1704,7 +2168,10 @@ def test_output_path_collision_fails_closed(tmp_path: Path) -> None:
         headers=["cell_id", "ENSG00000124762", "ENSG00000142168"],
     )
     source_set = create_source_set([create_source_file(mat_file, ImportFileRole.MATRIX)])
-    mapping = make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES)
+    mapping = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+    )
 
     with pytest.raises(ImporterSecurityError) as exc:
         importer.canonicalize(
@@ -1740,6 +2207,8 @@ def test_source_files_remain_immutable(tmp_path: Path) -> None:
 
     mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
         sample_column="sample_col",
         sample_mappings=[SampleMappingEntry(sourceValue="s1", sampleKey="SMP-1")],
     )
@@ -1757,11 +2226,6 @@ def test_source_files_remain_immutable(tmp_path: Path) -> None:
 
     assert sha_mat_before == sha_mat_after
     assert sha_cell_before == sha_cell_after
-
-
-# =========================================================================
-# 20. EXACT ROUND-TRIP ASSERTION (CSV & MTX)
-# =========================================================================
 
 
 def test_exact_round_trip_csv_and_mtx(tmp_path: Path) -> None:
@@ -1793,7 +2257,8 @@ def test_exact_round_trip_csv_and_mtx(tmp_path: Path) -> None:
     )
     csv_mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
-        cell_id_column="cell_id",
+        matrix_cell_id_column="cell_id",
+        cell_metadata_join_column="cell_id",
         condition_column="condition_source",
         reference_build="GRCh38",
     )
@@ -1825,12 +2290,16 @@ def test_exact_round_trip_csv_and_mtx(tmp_path: Path) -> None:
     mtx_file = tmp_path / "round_mtx.mtx"
     create_mtx_file(mtx_file, 2, 2, [(1, 1, 5), (2, 2, 15)])
     cell_meta_mtx = tmp_path / "cell_meta_mtx.csv"
-    create_csv_matrix(cell_meta_mtx, data=[["C_A"], ["C_B"]], headers=["cell_id"])
+    create_csv_matrix(
+        cell_meta_mtx,
+        data=[[1, "C_A"], [2, "C_B"]],
+        headers=["mtx_row", "cell_id"],
+    )
     feat_meta_mtx = tmp_path / "feat_meta_mtx.csv"
     create_csv_matrix(
         feat_meta_mtx,
-        data=[["ENSG00000124762", "CDKN1A"], ["ENSG00000142168", "SOD1"]],
-        headers=["gene_id", "symbol"],
+        data=[[1, "ENSG00000124762", "CDKN1A"], [2, "ENSG00000142168", "SOD1"]],
+        headers=["mtx_col", "gene_id", "symbol"],
     )
 
     mtx_set = create_source_set(
@@ -1842,6 +2311,8 @@ def test_exact_round_trip_csv_and_mtx(tmp_path: Path) -> None:
     )
     mtx_mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        cell_axis_index_column="mtx_row",
+        feature_axis_index_column="mtx_col",
         cell_id_column="cell_id",
         gene_id_column="gene_id",
         gene_symbol_column="symbol",
@@ -1875,14 +2346,8 @@ def test_exact_round_trip_csv_and_mtx(tmp_path: Path) -> None:
 
 
 def test_rangeindex_for_cells_by_genes_forbidden(tmp_path: Path) -> None:
-    """CSV/TSV fixture causing Pandas to create a RangeIndex with no authoritative row identity.
-
-    CELLS_BY_GENES: RangeIndex MUST NOT become obs_names.
-    Expected: inspect() -> NEEDS_MAPPING, canonicalize() -> controlled failure (MISSING_REQUIRED_METADATA).
-    """
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Pure numeric columns with gene headers, no cell ID column -> Pandas creates RangeIndex(0, 2)
     csv_file = tmp_path / "no_row_id_cells_by_genes.csv"
     csv_file.write_text("ENSG00000124762,ENSG00000142168\n10,20\n30,40\n", encoding="utf-8")
 
@@ -1891,12 +2356,10 @@ def test_rangeindex_for_cells_by_genes_forbidden(tmp_path: Path) -> None:
 
     source_set = create_source_set([create_source_file(csv_file, ImportFileRole.MATRIX)])
 
-    # Inspection must report NEEDS_MAPPING
     insp = importer.inspect(source_set)
     assert insp.status == InspectionStatus.NEEDS_MAPPING
     assert insp.requiresMapping is True
 
-    # Canonicalization without authoritative cell IDs must fail closed (never convert RangeIndex 0,1 to obs_names)
     mapping = make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES)
     out_h5ad = tmp_path / "fail_range_cbg.h5ad"
     with pytest.raises(ImporterSecurityError) as exc:
@@ -1912,14 +2375,8 @@ def test_rangeindex_for_cells_by_genes_forbidden(tmp_path: Path) -> None:
 
 
 def test_rangeindex_for_genes_by_cells_forbidden(tmp_path: Path) -> None:
-    """CSV/TSV fixture causing Pandas to create a RangeIndex with no authoritative row identity.
-
-    GENES_BY_CELLS: RangeIndex MUST NOT become var_names.
-    Expected: inspect() -> NEEDS_MAPPING, canonicalize() -> controlled failure (MISSING_REQUIRED_METADATA).
-    """
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Pure numeric columns with cell headers, no gene ID column -> Pandas creates RangeIndex(0, 3)
     tsv_file = tmp_path / "no_row_id_genes_by_cells.tsv"
     tsv_file.write_text("cell_A\tcell_B\n10\t20\n30\t40\n50\t60\n", encoding="utf-8")
 
@@ -1928,12 +2385,10 @@ def test_rangeindex_for_genes_by_cells_forbidden(tmp_path: Path) -> None:
 
     source_set = create_source_set([create_source_file(tsv_file, ImportFileRole.MATRIX)])
 
-    # Inspection must report NEEDS_MAPPING
     insp = importer.inspect(source_set)
     assert insp.status == InspectionStatus.NEEDS_MAPPING
     assert insp.requiresMapping is True
 
-    # Canonicalization without authoritative feature IDs must fail closed (never convert RangeIndex 0,1,2 to var_names)
     mapping = make_mapping(orientation=MatrixOrientation.GENES_BY_CELLS)
     out_h5ad = tmp_path / "fail_range_gbc.h5ad"
     with pytest.raises(ImporterSecurityError) as exc:
@@ -1949,15 +2404,8 @@ def test_rangeindex_for_genes_by_cells_forbidden(tmp_path: Path) -> None:
 
 
 def test_header_authority_regressions(tmp_path: Path) -> None:
-    """Test raw header validation before canonical identity creation:
-    1. Missing / blank column identity (e.g. 'cell_id,,ENSG00000142168')
-    2. Duplicate raw headers (e.g. 'cell_id,g1,g1')
-    3. Pandas-style duplicate-mangling risk (ensure 'g1.1' is never accepted from raw duplicate 'g1,g1')
-    4. Unnamed placeholder header ('cell_id,Unnamed: 1,ENSG00000142168' or leading comma ',g1,g2')
-    """
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # 1. Missing / blank column identity in header
     blank_col = tmp_path / "blank_col.csv"
     blank_col.write_text("cell_id,,ENSG00000142168\nc1,10,20\nc2,30,40\n", encoding="utf-8")
     src_blank = create_source_set([create_source_file(blank_col, ImportFileRole.MATRIX)])
@@ -1970,11 +2418,13 @@ def test_header_authority_regressions(tmp_path: Path) -> None:
             output_path=str(tmp_path / "out_blank.h5ad"),
             organism=Organism.HUMAN,
             gene_id_scheme=GeneIdScheme.ENSEMBL,
-            mapping=make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES),
+            mapping=make_mapping(
+                orientation=MatrixOrientation.CELLS_BY_GENES,
+                matrix_cell_id_column="cell_id",
+            ),
         )
     assert exc_blank.value.issue_code == ScientificIssueCode.MALFORMED_INPUT
 
-    # 2 & 3. Duplicate raw headers / Pandas duplicate-mangling risk ('g1,g1' -> 'g1', 'g1.1')
     dup_hdr = tmp_path / "dup_hdr.csv"
     dup_hdr.write_text(
         "cell_id,ENSG00000124762,ENSG00000124762\nc1,10,20\nc2,30,40\n", encoding="utf-8"
@@ -1989,11 +2439,13 @@ def test_header_authority_regressions(tmp_path: Path) -> None:
             output_path=str(tmp_path / "out_dup.h5ad"),
             organism=Organism.HUMAN,
             gene_id_scheme=GeneIdScheme.ENSEMBL,
-            mapping=make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES),
+            mapping=make_mapping(
+                orientation=MatrixOrientation.CELLS_BY_GENES,
+                matrix_cell_id_column="cell_id",
+            ),
         )
     assert exc_dup.value.issue_code == ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS
 
-    # 4a. Explicit 'Unnamed: 1' placeholder in column header
     unnamed_col = tmp_path / "unnamed_col.csv"
     unnamed_col.write_text(
         "cell_id,Unnamed: 1,ENSG00000142168\nc1,10,20\nc2,30,40\n", encoding="utf-8"
@@ -2003,13 +2455,12 @@ def test_header_authority_regressions(tmp_path: Path) -> None:
     assert any(iss.code == ScientificIssueCode.MALFORMED_INPUT for iss in issues_unnamed)
     assert importer.inspect(src_unnamed).status == InspectionStatus.INVALID
 
-    # 4b. Leading comma ',ENSG00000124762,ENSG00000142168' causing Pandas 'Unnamed: 0' on column 0
     leading_comma = tmp_path / "leading_comma.csv"
     leading_comma.write_text(
         ",ENSG00000124762,ENSG00000142168\nc1,10,20\nc2,30,40\n", encoding="utf-8"
     )
     src_leading = create_source_set([create_source_file(leading_comma, ImportFileRole.MATRIX)])
-    # Without explicit cellIdColumn mapping, Unnamed: 0 is not accepted as an authoritative header
+    assert importer.inspect(src_leading).status == InspectionStatus.INVALID
     with pytest.raises(ImporterSecurityError) as exc_leading:
         importer.canonicalize(
             source_set=src_leading,
@@ -2018,29 +2469,20 @@ def test_header_authority_regressions(tmp_path: Path) -> None:
             gene_id_scheme=GeneIdScheme.ENSEMBL,
             mapping=make_mapping(orientation=MatrixOrientation.CELLS_BY_GENES),
         )
-    assert exc_leading.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+    assert exc_leading.value.issue_code == ScientificIssueCode.MALFORMED_INPUT
 
 
 def test_generic_mtx_without_identity_metadata_inspect_and_canonicalize(tmp_path: Path) -> None:
-    """MATRIX only: valid numeric .mtx with orientation supplied, but no CELL_METADATA and no FEATURE_METADATA.
-
-    Expected:
-    - inspect(): NEEDS_MAPPING
-    - canonicalize(): fail closed (MISSING_REQUIRED_METADATA)
-    - No positional row/column identifiers may be generated.
-    """
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     mtx_file = tmp_path / "bare_matrix.mtx"
     create_mtx_file(mtx_file, 3, 2, [(1, 1, 10), (2, 2, 20), (3, 1, 30)])
 
     source_set = create_source_set([create_source_file(mtx_file, ImportFileRole.MATRIX)])
 
-    # 1. inspect() returns NEEDS_MAPPING
     insp = importer.inspect(source_set)
     assert insp.status == InspectionStatus.NEEDS_MAPPING
     assert insp.requiresMapping is True
 
-    # 2. canonicalize() fails closed for both orientations
     for orient in (MatrixOrientation.CELLS_BY_GENES, MatrixOrientation.GENES_BY_CELLS):
         out_h5ad = tmp_path / f"out_{orient.value}.h5ad"
         with pytest.raises(ImporterSecurityError) as exc:
@@ -2056,40 +2498,27 @@ def test_generic_mtx_without_identity_metadata_inspect_and_canonicalize(tmp_path
 
 
 def test_generic_mtx_with_source_feature_ids_and_stable_gene_ids(tmp_path: Path) -> None:
-    """Positive fixture for Generic MTX with CELL_METADATA and FEATURE_METADATA (distinct source vs stable IDs):
-    - MATRIX: 3 x 2 and 2 x 3 non-square numeric values
-    - CELL_METADATA: explicit unique cell IDs (non-10x barcode tokens)
-    - FEATURE_METADATA: explicit source feature IDs + stable Ensembl gene IDs + descriptive symbols
-    - Explicit orientation supplied (both CELLS_BY_GENES and GENES_BY_CELLS tested)
-    Proves:
-    - Matrix coordinates align to identities deterministically
-    - Canonical obs_names come from explicit cell metadata
-    - Canonical var_names come from explicit stable gene identity
-    - Canonical var['source_feature_id'] preserves original source feature tokens
-    - Exact values survive required transpose / no-transpose
-    - Zero 10x barcode semantics assumed.
-    """
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
     cell_meta = tmp_path / "cells_custom.csv"
     create_csv_matrix(
         cell_meta,
         data=[
-            ["donor1_well_A01"],
-            ["donor1_well_B04"],
+            [1, "donor1_well_A01"],
+            [2, "donor1_well_B04"],
         ],
-        headers=["custom_cell_token"],
+        headers=["cell_axis_idx", "custom_cell_token"],
     )
 
     feat_meta = tmp_path / "features_custom.csv"
     create_csv_matrix(
         feat_meta,
         data=[
-            ["probe_alpha", "ENSG00000124762", "CDKN1A"],
-            ["probe_beta", "ENSG00000142168", "SOD1"],
-            ["probe_gamma", "ENSG00000182463", "ACTB"],
+            [1, "probe_alpha", "ENSG00000124762", "CDKN1A"],
+            [2, "probe_beta", "ENSG00000142168", "SOD1"],
+            [3, "probe_gamma", "ENSG00000182463", "ACTB"],
         ],
-        headers=["matrix_probe_id", "ensembl_stable_id", "hgnc_symbol"],
+        headers=["feat_axis_idx", "matrix_probe_id", "ensembl_stable_id", "hgnc_symbol"],
     )
 
     # Case 1: 2 x 3 MTX (CELLS_BY_GENES — no transpose)
@@ -2114,7 +2543,10 @@ def test_generic_mtx_with_source_feature_ids_and_stable_gene_ids(tmp_path: Path)
     )
     map_cbg = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
+        cell_axis_index_column="cell_axis_idx",
+        feature_axis_index_column="feat_axis_idx",
         cell_id_column="custom_cell_token",
+        feature_metadata_join_column="matrix_probe_id",
         gene_id_column="ensembl_stable_id",
         gene_symbol_column="hgnc_symbol",
     )
@@ -2156,7 +2588,10 @@ def test_generic_mtx_with_source_feature_ids_and_stable_gene_ids(tmp_path: Path)
     )
     map_gbc = make_mapping(
         orientation=MatrixOrientation.GENES_BY_CELLS,
+        cell_axis_index_column="cell_axis_idx",
+        feature_axis_index_column="feat_axis_idx",
         cell_id_column="custom_cell_token",
+        feature_metadata_join_column="matrix_probe_id",
         gene_id_column="ensembl_stable_id",
         gene_symbol_column="hgnc_symbol",
     )
@@ -2177,12 +2612,11 @@ def test_generic_mtx_with_source_feature_ids_and_stable_gene_ids(tmp_path: Path)
 
 
 def test_cell_metadata_id_join_unrelated_row_positions(tmp_path: Path) -> None:
-    """Proves CELL_METADATA joins strictly by cellIdColumn value to authoritative matrix cell tokens,
+    """Proves CELL_METADATA joins strictly by cellMetadataJoinColumn value to authoritative matrix cell tokens,
     never by DataFrame row number, using deliberately unrelated row positions and extra unreferenced rows.
     """
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
 
-    # Matrix has 3 cells in order: cell_Z, cell_A, cell_M
     mat_file = tmp_path / "mat_cells.csv"
     create_csv_matrix(
         mat_file,
@@ -2194,7 +2628,6 @@ def test_cell_metadata_id_join_unrelated_row_positions(tmp_path: Path) -> None:
         headers=["matrix_cid", "ENSG00000124762", "ENSG00000142168"],
     )
 
-    # Metadata has unrelated row positions, non-first join column, and extra unreferenced rows
     cell_meta = tmp_path / "meta_unrelated_pos.csv"
     create_csv_matrix(
         cell_meta,
@@ -2215,10 +2648,10 @@ def test_cell_metadata_id_join_unrelated_row_positions(tmp_path: Path) -> None:
         ]
     )
 
-    # 1. Requesting a non-existent cellIdColumn must fail closed
     bad_mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
-        cell_id_column="non_existent_col",
+        matrix_cell_id_column="matrix_cid",
+        cell_metadata_join_column="non_existent_col",
         batch_column="batch_col",
     )
     with pytest.raises(ImporterSecurityError) as exc:
@@ -2231,10 +2664,10 @@ def test_cell_metadata_id_join_unrelated_row_positions(tmp_path: Path) -> None:
         )
     assert exc.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
 
-    # 2. Valid cellIdColumn joins by value and realigns metadata to [cell_Z, cell_A, cell_M]
     valid_mapping = make_mapping(
         orientation=MatrixOrientation.CELLS_BY_GENES,
-        cell_id_column="authoritative_cell_key",
+        matrix_cell_id_column="matrix_cid",
+        cell_metadata_join_column="authoritative_cell_key",
         batch_column="batch_col",
         condition_column="cond_col",
     )

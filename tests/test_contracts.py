@@ -107,3 +107,37 @@ def test_contracts_authority_and_no_duplicate_models() -> None:
     # Ensure re-exported types are identical to the authoritative package types
     assert contracts_pkg.RunManifest is cellweave_contracts.RunManifest
     assert contracts_pkg.ScientificJobPayload is cellweave_contracts.ScientificJobPayload
+    assert contracts_pkg.MetadataMappingSubmission is cellweave_contracts.MetadataMappingSubmission
+
+
+@pytest.mark.unit
+def test_metadata_mapping_submission_step_g1_fields() -> None:
+    """Verify synchronized MetadataMappingSubmission accepts all 6 explicit Generic Matrix identity fields."""
+    from cellweave_science.contracts import (
+        GeneIdScheme,
+        MatrixOrientation,
+        MetadataMappingSubmission,
+        Organism,
+    )
+
+    sub = MetadataMappingSubmission(
+        datasetVersionId="dsv_018f6c52-7e23-7185-9856-f046dc0320a2",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        orientation=MatrixOrientation.GENES_BY_CELLS,
+        matrixCellIdColumn="cell_col",
+        matrixFeatureIdColumn="feature_col",
+        cellMetadataJoinColumn="cell_join_col",
+        featureMetadataJoinColumn="feature_join_col",
+        cellAxisIndexColumn="mtx_cell_idx",
+        featureAxisIndexColumn="mtx_feat_idx",
+        cellIdColumn="canonical_cell_id",
+        geneIdColumn="ensembl_id",
+        geneSymbolColumn="gene_symbol",
+    )
+    assert sub.matrixCellIdColumn == "cell_col"
+    assert sub.matrixFeatureIdColumn == "feature_col"
+    assert sub.cellMetadataJoinColumn == "cell_join_col"
+    assert sub.featureMetadataJoinColumn == "feature_join_col"
+    assert sub.cellAxisIndexColumn == "mtx_cell_idx"
+    assert sub.featureAxisIndexColumn == "mtx_feat_idx"

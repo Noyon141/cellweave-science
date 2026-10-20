@@ -1,13 +1,13 @@
 # CellWeave Phase 3 — Generic Matrix Importer Architecture & Specification
 
 ## 1. Scope & Authority
-- **Authority**: `docs/architecture/CellWeave-Production-Master-System-Design-v1.0.pdf` (Section 121: Scientific Import System, Phase 3).
+- **Authority**: `docs/architecture/CellWeave-Production-Master-System-Design-v1.0.pdf` (Section 121: Scientific Import System, Phase 3) and the Step G.1 Contract Amendment (`MetadataMappingSubmission`).
 - **Supported Formats**:
   - `SourceFormat.GENERIC_MATRIX`: Delimited expression matrices (CSV / TSV, plain or bounded `.gz`) and Matrix Market coordinate files (`.mtx` / `.mtx.gz`).
 - **Participating Roles & Cardinality**:
   - `ImportFileRole.MATRIX`: exactly 1 file (mandatory).
-  - `ImportFileRole.CELL_METADATA`: 0..1 file (optional for CSV/TSV, required for MTX).
-  - `ImportFileRole.FEATURE_METADATA`: 0..1 file (optional for CSV/TSV, required for MTX).
+  - `ImportFileRole.CELL_METADATA`: 0..1 file (optional for CSV/TSV, mandatory for Generic MTX).
+  - `ImportFileRole.FEATURE_METADATA`: 0..1 file (optional for CSV/TSV, mandatory for Generic MTX).
   - Extraneous roles (`PRIMARY`, `BARCODES`, `FEATURES`) are strictly prohibited (`INVALID_IMPORT_CARDINALITY`).
 - **Canonical Representation**: CellWeave Canonical AnnData Policy B (raw unnormalized integer counts stored strictly in `X` as SciPy CSR; `layers` empty; `obsm`, `varm`, `obsp`, `varp` empty; minimal controlled provenance in `uns`).
 
@@ -21,119 +21,116 @@
   - Lines containing tabs and 0 commas resolve as tab-delimited (`\t`).
   - Mixed lines require a $\ge 2:1$ predominance ratio; otherwise, fails closed with `ScientificIssueCode.FORMAT_MISMATCH`.
   - Undelimited single-column files (0 commas and 0 tabs across lines) resolve deterministically to a single-column table independent of filename extension.
-  - An expression matrix file must contain at least 2 columns (identifier column + expression columns); single-column matrices fail closed with `ScientificIssueCode.MALFORMED_INPUT`.
-- **Bounded Decompression Safety**: All gzip reading streams through Step D `open_bounded_gzip_stream` governed by explicit `DecompressionLimits`. Bypassing decompression limits via unconstrained readers is forbidden.
+  - An expression matrix file must contain at least 2 columns; single-column matrices fail closed with `ScientificIssueCode.MALFORMED_INPUT`.
+- **Bounded Decompression Safety**: All gzip reading streams through Step D `open_bounded_gzip_stream` governed by explicit `DecompressionLimits`.
 
 ---
 
-## 3. Matrix Identity Model & Orientation Authority
-Orientation is **never** guessed from dimension heuristics, filenames, or identifier patterns.
+## 3. Authoritative Identity Model & Orientation Policy (Step G.1 / G.2)
 
-| Source Type | Source Cell Identity Authority | Source Feature Identity Authority | Metadata Join Key | Canonical `obs_names` Source | Canonical `var_names` Source |
+All pre-G.1 heuristics (column-0 identity fallback, named non-numeric first-column heuristic, Pandas `RangeIndex` fallback, metadata row-position assumptions, subset-overlap column guessing, and 10x barcode/feature positional conventions) are removed.
+
+| Source Type | Source Cell Identity Authority | Source Feature Identity Authority | Metadata Join / Coordinate Authority | Canonical `obs_names` Authority | Canonical `var_names` Authority |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **CSV/TSV `CELLS_BY_GENES`** | Explicit matrix column (`mapping.cellIdColumn` or named column 0 verified by `_has_authoritative_row_id_column`) | Raw file column headers (columns $1 \dots N$, verified free of blanks, duplicates, and `Unnamed:` placeholders) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column matching source feature headers | Validated source cell IDs from matrix row-ID column | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else validated matrix column headers |
-| **CSV/TSV `GENES_BY_CELLS`** | Raw file column headers (columns $1 \dots N$, verified free of blanks, duplicates, and `Unnamed:` placeholders) | Explicit matrix column (`mapping.geneIdColumn` or named column 0 verified by `_has_authoritative_row_id_column`) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column matching source feature row IDs | Validated source cell IDs from matrix column headers | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else validated matrix row-ID column |
-| **MTX `CELLS_BY_GENES`** | `CELL_METADATA` explicit column (`mapping.cellIdColumn` or column 0; mandatory) | `FEATURE_METADATA` source feature column (column 0; mandatory) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column 0 | Validated cell IDs from `CELL_METADATA` | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else `FEATURE_METADATA` column 0 |
-| **MTX `GENES_BY_CELLS`** | `CELL_METADATA` explicit column (`mapping.cellIdColumn` or column 0; mandatory) | `FEATURE_METADATA` source feature column (column 0; mandatory) | Cell: `mapping.cellIdColumn` (or column 0 of `CELL_METADATA`)<br>Feature: `FEATURE_METADATA` column 0 | Validated cell IDs from `CELL_METADATA` | Resolved `mapping.geneIdColumn` in `FEATURE_METADATA` if mapped & distinct, else `FEATURE_METADATA` column 0 |
+| **CSV/TSV `CELLS_BY_GENES`** | Explicit matrix column (`mapping.matrixCellIdColumn`, mandatory) | Raw expression column headers (all headers excluding `matrixCellIdColumn`) | Cell: `mapping.cellMetadataJoinColumn` (mandatory if `CELL_METADATA` supplied)<br>Feature: `mapping.featureMetadataJoinColumn` (mandatory if `FEATURE_METADATA` supplied) | `CELL_METADATA[mapping.cellIdColumn]` if mapped, else validated source cell tokens from `MATRIX[matrixCellIdColumn]` | `FEATURE_METADATA[mapping.geneIdColumn]` if mapped, else validated source feature header tokens |
+| **CSV/TSV `GENES_BY_CELLS`** | Raw expression column headers (all headers excluding `matrixFeatureIdColumn`) | Explicit matrix column (`mapping.matrixFeatureIdColumn`, mandatory) | Cell: `mapping.cellMetadataJoinColumn` (mandatory if `CELL_METADATA` supplied)<br>Feature: `mapping.featureMetadataJoinColumn` (mandatory if `FEATURE_METADATA` supplied) | `CELL_METADATA[mapping.cellIdColumn]` if mapped, else validated source cell header tokens | `FEATURE_METADATA[mapping.geneIdColumn]` if mapped, else validated source feature tokens from `MATRIX[matrixFeatureIdColumn]` |
+| **MTX `CELLS_BY_GENES`** | MTX row coordinate $1 \dots n_{\text{cells}}$ aligned via `CELL_METADATA[mapping.cellAxisIndexColumn]` | MTX column coordinate $1 \dots n_{\text{features}}$ aligned via `FEATURE_METADATA[mapping.featureAxisIndexColumn]` | Cell coordinate: `mapping.cellAxisIndexColumn` (mandatory)<br>Feature coordinate: `mapping.featureAxisIndexColumn` (mandatory)<br>Optional source tokens: `cellMetadataJoinColumn`, `featureMetadataJoinColumn` | `CELL_METADATA[mapping.cellIdColumn]` (mandatory; never the numeric axis index) | `FEATURE_METADATA[mapping.geneIdColumn]` (mandatory; never the numeric axis index) |
+| **MTX `GENES_BY_CELLS`** | MTX column coordinate $1 \dots n_{\text{cells}}$ aligned via `CELL_METADATA[mapping.cellAxisIndexColumn]` | MTX row coordinate $1 \dots n_{\text{features}}$ aligned via `FEATURE_METADATA[mapping.featureAxisIndexColumn]` | Cell coordinate: `mapping.cellAxisIndexColumn` (mandatory)<br>Feature coordinate: `mapping.featureAxisIndexColumn` (mandatory)<br>Optional source tokens: `cellMetadataJoinColumn`, `featureMetadataJoinColumn` | `CELL_METADATA[mapping.cellIdColumn]` (mandatory; never the numeric axis index) | `FEATURE_METADATA[mapping.geneIdColumn]` (mandatory; never the numeric axis index) |
 
-- **Prohibition on RangeIndex & Fabricated IDs**:
-  - `read_delimited_table()` reads with `index_col=False`, leaving `df.index` as a default `pd.RangeIndex`.
-  - `df.index` is **never** used as biological cell or feature identities.
-  - Explicit guard `_guard_against_generated_positional_index()` rejects `pd.RangeIndex` or integer positional indices (`MISSING_REQUIRED_METADATA`).
-  - Fallback synthetic identifiers (`"0"`, `"1"`, `cell_1`, `row_1`, `feature_1`, or `Unnamed: 0`) are strictly prohibited unless those literal strings were the authoritative source values in a named identifier column.
-- **CSV/TSV Header Authority**:
-  - Raw header tokens are inspected directly from the stream before Pandas duplicate mangling (`g1` $\to$ `g1.1`) or placeholder generation (`Unnamed: k`).
-  - Blank headers, `Unnamed:` placeholders, or duplicate raw column headers fail closed.
-- **Generic MTX vs 10x Separation**:
-  - Generic Matrix Market files contain only numeric coordinate triplets and dimensions.
-  - `GENERIC_MATRIX` never assumes 10x barcode formats, 10x `features.tsv` column positions, or default `GENES_BY_CELLS` orientation. Both `CELL_METADATA` and `FEATURE_METADATA` are mandatory for generic MTX canonicalization.
-- **Inspection Invariant**: Because orientation cannot be assumed, `inspect()` reports `InspectionStatus.NEEDS_MAPPING` with `requiresMapping=True` and `ScientificIssueCode.AMBIGUOUS_ORIENTATION` until explicitly confirmed by the user.
+### Identity Flow Diagrams
 
----
+#### A. CSV/TSV Token $\to$ Metadata Join $\to$ Canonical Identity
+```mermaid
+flowchart LR
+  subgraph CSV_MATRIX["CSV / TSV MATRIX"]
+    MC["matrixCellIdColumn (CELLS_BY_GENES)<br/>or Column Headers (GENES_BY_CELLS)"]
+    MF["Column Headers (CELLS_BY_GENES)<br/>or matrixFeatureIdColumn (GENES_BY_CELLS)"]
+  end
 
-## 4. Contract Field Semantics: `cellIdColumn`, `geneIdColumn`, `geneSymbolColumn`
+  subgraph CELL_META["Optional CELL_METADATA"]
+    CMJ["cellMetadataJoinColumn"]
+    CID["cellIdColumn (optional translation)"]
+  end
 
-### Cell Identity (`cellIdColumn`)
-- In `CELL_METADATA`: If specified, `cellIdColumn` must exist as a column in the metadata table.
-- Values must be non-empty strings and unique (`DUPLICATE_CELL_IDS`).
-- Every cell present in the matrix must exist in `CELL_METADATA` (`MISSING_REQUIRED_METADATA`).
-- Joins are performed strictly by value, not by row position.
+  subgraph FEAT_META["Optional FEATURE_METADATA"]
+    FMJ["featureMetadataJoinColumn"]
+    GID["geneIdColumn (canonical stable ID)"]
+    GSYM["geneSymbolColumn (descriptive)"]
+  end
 
-### Feature Identity (`geneIdColumn`)
-- In `FEATURE_METADATA`: Resolves the stable feature identifier column (e.g. Ensembl gene IDs).
-- When `geneIdColumn` is distinct from the source join key, it supplies the canonical `var_names`.
-- All stable IDs must be unique; duplicate stable IDs fail with `AMBIGUOUS_GENE_IDENTIFIERS`.
+  subgraph CANONICAL["Canonical AnnData (Policy B)"]
+    OBS["obs_names (canonical cell_id)"]
+    VAR["var_names (canonical gene_id)"]
+    SRC_FEAT["var['source_feature_id']"]
+    SYM_COL["var['gene_symbol']"]
+  end
 
-### Feature Description (`geneSymbolColumn`)
-- In `FEATURE_METADATA`: Resolves descriptive gene symbols (e.g. HGNC symbols).
-- Supplies `adata.var["gene_symbol"]`.
-- When stable IDs are unique, duplicate symbols across different stable IDs are valid biology and preserved without mangling or `make_unique()`.
+  MC -->|"strict value join"| CMJ
+  CMJ --> CID
+  CID -->|"if mapped (else source token)"| OBS
+  MF -->|"preserved verbatim"| SRC_FEAT
+  MF -->|"strict value join"| FMJ
+  FMJ --> GID --> VAR
+  FMJ --> GSYM --> SYM_COL
+```
 
----
+#### B. Generic MTX Coordinate Index $\to$ Metadata Row $\to$ Source Token $\to$ Canonical Identity
+```mermaid
+flowchart LR
+  subgraph MTX["Generic MTX (1-based coordinates)"]
+    AX_C["Cell Axis Coordinate (1..n_cells)<br/>Row in CELLS_BY_GENES / Col in GENES_BY_CELLS"]
+    AX_F["Feature Axis Coordinate (1..n_features)<br/>Col in CELLS_BY_GENES / Row in GENES_BY_CELLS"]
+  end
 
-## 5. Metadata Join & Extra-Row Policy
-- **Deterministic Value Join**: Metadata tables are joined on explicit key values. Row ordering in `CELL_METADATA` or `FEATURE_METADATA` does not matter; tables are realigned deterministically to match matrix order.
-- **Extra Metadata Rows**: Extra unique metadata rows in `CELL_METADATA` or `FEATURE_METADATA` that are not referenced by the expression matrix are safely ignored (filtered out). Every matrix cell/feature must resolve exactly once.
-- **Missing Matrix Keys**: If any cell or feature present in the matrix is missing from the required metadata table, the importer fails closed with `ScientificIssueCode.MISSING_REQUIRED_METADATA`.
-- **Positional Joins Prohibited**: Falling back to row/column index positions when names do not match is strictly forbidden.
+  subgraph CELL_META_MTX["Mandatory CELL_METADATA"]
+    CAX["cellAxisIndexColumn (strict 1..n_cells)"]
+    CCID["cellIdColumn (mandatory)"]
+  end
 
----
+  subgraph FEAT_META_MTX["Mandatory FEATURE_METADATA"]
+    FAX["featureAxisIndexColumn (strict 1..n_features)"]
+    FTOK["featureMetadataJoinColumn (optional source token)"]
+    FGID["geneIdColumn (mandatory stable ID)"]
+    FSYM["geneSymbolColumn (optional symbol)"]
+  end
 
-## 6. Sample Mapping Authority (CellWeave PostgreSQL Truth)
-- **Zero Pass-Through**: Source-side values in `sampleColumn` never pass through automatically as canonical `sample_key`.
-- **Complete Mapping Invariant**: If `sampleColumn` is specified, every unique source sample value present in the data must be explicitly mapped to an approved `SampleMappingEntry.sampleKey`. Missing, unmapped, or blank targets fail closed with `MISSING_REQUIRED_METADATA`.
-- **No Mapping Without Column**: Providing `sampleMappings` without a corresponding `sampleColumn` fails closed.
-- **No Global Single-Sample Guessing**: Assigning a global sample key without an explicit source column and mapping is prohibited.
+  subgraph CANON_MTX["Canonical AnnData (Policy B)"]
+    M_OBS["obs_names"]
+    M_VAR["var_names"]
+    M_SRC["var['source_feature_id']"]
+    M_SYM["var['gene_symbol']"]
+  end
 
----
-
-## 7. Biological Annotation Mappings
-- **Clinical/Experimental Fields**:
-  - `conditionColumn` $\to$ `adata.obs["condition"]`
-  - `batchColumn` $\to$ `adata.obs["batch"]`
-  - `biologicalReplicateColumn` $\to$ `adata.obs["biological_replicate"]`
-  - `technicalReplicateColumn` $\to$ `adata.obs["technical_replicate"]`
-- **Fail-Closed on Missing Request**: Requesting a mapping column that does not exist in `CELL_METADATA` fails closed with `MISSING_REQUIRED_METADATA`.
-- **Exclusion of Unmapped Columns**: Source metadata columns that are not explicitly mapped are never copied into canonical `obs`.
-
----
-
-## 8. Canonical Slot Schemas
-
-### Canonical `obs` Schema
-- **Index**: `cell_id` (sanitized unique cell identifiers).
-- **Columns**: Strictly limited to mapped fields:
-  ```python
-  ["sample_key", "condition", "batch", "biological_replicate", "technical_replicate"]
-  ```
-- **Minimal Mapping**: If no metadata columns are mapped, `obs` contains 0 optional columns (`len(adata.obs.columns) == 0`).
-
-### Canonical `var` Schema
-- **Index**: `gene_id` (canonical stable identifiers).
-- **Columns**:
-  - `source_feature_id`: Always present (original feature token from source matrix).
-  - `gene_symbol`: Present **only** when `geneSymbolColumn` is explicitly mapped and resolved.
-- **Minimal Schema**: When no symbol column is mapped, `var` contains only `["source_feature_id"]`. Arbitrary feature metadata columns are not copied into `var`.
+  AX_C -->|"exact 1..n_cells permutation"| CAX --> CCID --> M_OBS
+  AX_F -->|"exact 1..n_features permutation"| FAX
+  FAX --> FTOK --> M_SRC
+  FAX --> FGID --> M_VAR
+  FAX --> FSYM --> M_SYM
+```
 
 ---
 
-## 9. Organism, Gene ID Scheme, & Reference Build Policy
-- **Step D Organism Policy Reused**:
-  - 100% Human Ensembl IDs $\implies$ `Organism.HUMAN` candidate.
-  - 100% Mouse Ensembl IDs $\implies$ `Organism.MOUSE` candidate.
-  - Human + Mouse mixture $\implies$ `InspectionStatus.INVALID` with `ScientificIssueCode.UNRESOLVED_SPECIES`.
-  - Ensembl mixed with symbols $\implies$ candidate unresolved (`None`).
-  - Symbol-only identifiers $\implies$ candidate unresolved (`None`).
-- **Gene ID Scheme**:
-  - `GeneIdScheme.ENSEMBL`: Confirmed Ensembl identifier space.
-  - `GeneIdScheme.SYMBOL`: Explicit confirmed unique symbol identifiers. Duplicate symbols under symbol scheme fail closed with `AMBIGUOUS_GENE_IDENTIFIERS`.
-- **Reference Build**:
-  - Preserved verbatim only from explicit user mapping (`mapping.referenceBuild`).
-  - Never inferred or guessed from organism, Ensembl prefix, or file name. If omitted, canonical AnnData has no `reference_build` in `uns`.
+## 4. Generic MTX Coordinate Validation Invariants
+For both `cellAxisIndexColumn` and `featureAxisIndexColumn`:
+- Values must be strict 1-based positive integer strings (`^[1-9][0-9]*$`).
+- Rejects zero (`0`), negative numbers, fractional values, non-numeric text, blanks/nulls, duplicates, gaps, out-of-range coordinates, or extra metadata rows.
+- The set of cell coordinates must equal $\{1, 2, \dots, n_{\text{cells}}\}$ and the set of feature coordinates must equal $\{1, 2, \dots, n_{\text{features}}\}$.
+- Metadata file row order is completely irrelevant: reordering `CELL_METADATA` or `FEATURE_METADATA` rows produces bit-for-bit identical canonical `obs_names`, `var_names`, `var["source_feature_id"]`, and `X` count coordinates.
+- Helper coordinate columns (`cellAxisIndexColumn`, `featureAxisIndexColumn`) are used solely for alignment and are **never** copied into canonical `obs` or `var`.
 
 ---
 
-## 10. Memory & Performance Limitations
-- Delimited text expression matrices (CSV/TSV) require line-by-line streaming during inspection and bounded chunk parsing during canonicalization.
-- For extremely large datasets ($>100\text{k}$ cells), CSV/TSV text serialization introduces significant parsing overhead compared to binary HDF5 (`.h5ad` / 10x H5).
-- Resource limits are strictly enforced via `GenericMatrixConfig.decompression_limits`.
+## 5. Inspection Column Discovery & Current Contract Boundary
+- `inspect()` returns `availableCellMetadataColumns` from `CELL_METADATA` and `availableFeatureMetadataColumns` from `FEATURE_METADATA`.
+- **Documented Contract Limitation for UI Wizard**: `ImportInspectionResult` (`schemas/domain/import-inspection-result.v1.json`) intentionally exposes `availableCellMetadataColumns` and `availableFeatureMetadataColumns` for supplied metadata files and does not include a separate field for `MATRIX`-internal column headers. When the future UI Metadata Wizard prompts for `matrixCellIdColumn` or `matrixFeatureIdColumn` on a CSV/TSV `MATRIX`, it must either inspect the uploaded matrix header preview or enter the explicit matrix identifier column name without polluting `availableCellMetadataColumns` or `availableFeatureMetadataColumns`.
+
+---
+
+## 6. Sample Mapping & Biological Annotations
+- **Zero Sample Pass-Through**: `sampleColumn` values must resolve 100% through `mapping.sampleMappings` (`SampleMappingEntry.sampleKey`). Missing or partial mappings fail closed (`MISSING_REQUIRED_METADATA`).
+- **Optional `obs` Columns** (populated only when explicitly mapped):
+  `["sample_key", "condition", "batch", "biological_replicate", "technical_replicate"]`.
+- **Controlled `var` Columns**:
+  `["source_feature_id"]` plus optional `"gene_symbol"` when `geneSymbolColumn` is explicitly mapped.
+- **Controlled `uns` Keys**:
+  `organism`, `gene_id_scheme`, and optional `reference_build` (only when explicitly provided).
