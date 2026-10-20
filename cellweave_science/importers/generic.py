@@ -14,9 +14,12 @@ Invariants:
    negative, NaN/Inf, and ambiguous near-integral values.
 3. Strict sample authority: source values never pass through to sample_key; all mapped
    cells must resolve through explicit SampleMappingEntry.sampleKey. Incomplete mapping fails closed.
-4. Deterministic metadata joins: cell and feature metadata joined on explicit identifiers.
-   Duplicate metadata keys, missing matrix IDs, or positional-only guessing strictly prohibited.
+4. Deterministic metadata joins: cell and feature metadata joined on explicit identifiers by value,
+   not position. Duplicate metadata keys or missing matrix IDs strictly prohibited. Extra unreferenced
+   metadata rows are safely ignored.
 5. Slot hygiene: Policy B AnnData with SciPy CSR matrix in X, clean layers, empty obsm/varm/uns.
+6. Content-based format and delimiter detection: file extensions (.csv/.tsv) are never used
+   as authoritative format evidence.
 """
 
 from __future__ import annotations
@@ -97,16 +100,25 @@ class GenericMatrixConfig:
 
 
 def sniff_delimiter(file_path: Path | str, limits: DecompressionLimits) -> str:
-    """Deterministically detect delimiter (comma or tab) from text stream.
+    """Deterministically detect delimiter (comma or tab) from text stream content.
 
-    Raises:
-        CountValidationError: If delimiter is ambiguous, unsupported, or file is empty.
+    Content-based detection invariants:
+    1. Delimiters are inferred strictly from stream content, never from file extensions (.csv/.tsv).
+    2. A line with commas and 0 tabs is comma-delimited (',').
+    3. A line with tabs and 0 commas is tab-delimited ('\\t').
+    4. Mixed lines require a >= 2:1 predominance ratio, otherwise FORMAT_MISMATCH is raised.
+    5. Undelimited single-column content (0 commas and 0 tabs across content) returns a consistent
+       single-column delimiter ('\\t') independent of filename extension.
+    6. Empty files or comment-only files raise MALFORMED_INPUT.
     """
     path = validate_trusted_local_path(file_path)
+    inspected_any = False
+
     for raw_line in stream_text_lines(path, limits=limits):
         line = raw_line.strip()
         if not line or line.startswith("#") or line.startswith("%"):
             continue
+        inspected_any = True
         tab_count = line.count("\t")
         comma_count = line.count(",")
         if tab_count > 0 and comma_count == 0:
@@ -122,21 +134,16 @@ def sniff_delimiter(file_path: Path | str, limits: DecompressionLimits) -> str:
                 f"Ambiguous delimiter in {path.name}: contains both commas ({comma_count}) and tabs ({tab_count})",
                 issue_code=ScientificIssueCode.FORMAT_MISMATCH,
             )
-        # Single column line (no comma or tab): check file extension
-        ext = "".join(path.suffixes).lower()
-        if ".csv" in ext:
-            return ","
-        if ".tsv" in ext:
-            return "\t"
+
+    if not inspected_any:
         raise CountValidationError(
-            f"No valid delimiter (comma or tab) found in header line of {path.name}",
-            issue_code=ScientificIssueCode.FORMAT_MISMATCH,
+            f"File {path.name} is empty or contains only comments",
+            issue_code=ScientificIssueCode.MALFORMED_INPUT,
         )
 
-    raise CountValidationError(
-        f"File {path.name} is empty or contains only comments",
-        issue_code=ScientificIssueCode.MALFORMED_INPUT,
-    )
+    # Content has no commas and no tabs in any inspected line (undelimited single-column table)
+    # Return a deterministic delimiter ('\t') independent of filename extension
+    return "\t"
 
 
 def read_delimited_table(
@@ -227,7 +234,7 @@ class GenericMatrixImporter:
             return False
 
     def _detect_matrix_kind(self, path: Path) -> str:
-        """Detect whether matrix file is MTX, TSV, or CSV."""
+        """Detect whether matrix file is MTX, TSV, or CSV strictly from file contents."""
         inspection = inspect_physical_file(path)
         if inspection.detected_format == PhysicalContainerFormat.MATRIX_MARKET:
             return "MTX"
@@ -241,7 +248,7 @@ class GenericMatrixImporter:
         return "TSV" if delim == "\t" else "CSV"
 
     def validate(self, source_set: ImportSourceSet) -> list[ScientificIssue]:
-        """Validate cardinality, structural parsing, table consistency, and raw counts."""
+        """Validate cardinality, structural parsing, table consistency, duplicate IDs, and raw counts."""
         cardinality_issues = validate_import_source_set_cardinality(source_set)
         if cardinality_issues:
             return cardinality_issues
@@ -369,6 +376,37 @@ class GenericMatrixImporter:
                     )
                 ]
 
+            # Check duplicate row identifiers (column 0)
+            raw_row_ids = df.iloc[:, 0].astype(str).tolist()
+            if len(raw_row_ids) != len(set(raw_row_ids)):
+                return [
+                    ScientificIssue(
+                        code=ScientificIssueCode.DUPLICATE_CELL_IDS,
+                        severity=ScientificIssueSeverity.ERROR,
+                        message=f"Duplicate identifiers found in row index column of {matrix_path.name}",
+                        userActionRequired=True,
+                    )
+                ]
+
+            # Check duplicate column identifiers in raw header (before pandas mangles them)
+            for raw_line in stream_text_lines(matrix_path, limits=self.config.decompression_limits):
+                line = raw_line.strip()
+                if not line or line.startswith("#") or line.startswith("%"):
+                    continue
+                header_tokens = [h.strip() for h in line.split(delim)]
+                if len(header_tokens) > 1:
+                    raw_feature_tokens = header_tokens[1:]
+                    if len(raw_feature_tokens) != len(set(raw_feature_tokens)):
+                        return [
+                            ScientificIssue(
+                                code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
+                                severity=ScientificIssueSeverity.ERROR,
+                                message=f"Duplicate identifiers found in column header of {matrix_path.name}",
+                                userActionRequired=True,
+                            )
+                        ]
+                break
+
             # Validate numeric expression body (columns 1..N)
             expr_df = df.iloc[:, 1:]
             try:
@@ -412,6 +450,15 @@ class GenericMatrixImporter:
                             userActionRequired=True,
                         )
                     ]
+                if cell_df.iloc[:, 0].duplicated().any():
+                    return [
+                        ScientificIssue(
+                            code=ScientificIssueCode.DUPLICATE_CELL_IDS,
+                            severity=ScientificIssueSeverity.ERROR,
+                            message=f"Duplicate cell identifiers in CELL_METADATA table {cell_meta_path.name}",
+                            userActionRequired=True,
+                        )
+                    ]
             except DecompressionLimitError as exc:
                 return [
                     ScientificIssue(
@@ -445,6 +492,15 @@ class GenericMatrixImporter:
                             code=ScientificIssueCode.MALFORMED_INPUT,
                             severity=ScientificIssueSeverity.ERROR,
                             message=f"FEATURE_METADATA table in {feat_meta_path.name} is empty",
+                            userActionRequired=True,
+                        )
+                    ]
+                if feat_df.iloc[:, 0].duplicated().any():
+                    return [
+                        ScientificIssue(
+                            code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
+                            severity=ScientificIssueSeverity.ERROR,
+                            message=f"Duplicate feature identifiers in FEATURE_METADATA table {feat_meta_path.name}",
                             userActionRequired=True,
                         )
                     ]
@@ -500,7 +556,7 @@ class GenericMatrixImporter:
         matrix_path = validate_trusted_local_path(matrix_file.local_path)
         matrix_kind = self._detect_matrix_kind(matrix_path)
 
-        # Inspect available metadata columns
+        # Inspect available metadata columns strictly from metadata tables
         cell_meta_cols: list[str] = []
         cell_meta_files = source_set.get_files_by_role(ImportFileRole.CELL_METADATA)
         if cell_meta_files:
@@ -515,6 +571,7 @@ class GenericMatrixImporter:
 
         feat_meta_cols: list[str] = []
         feat_meta_files = source_set.get_files_by_role(ImportFileRole.FEATURE_METADATA)
+        feat_df_cand: pd.DataFrame | None = None
         if feat_meta_files:
             try:
                 feat_df, _ = read_delimited_table(
@@ -522,6 +579,7 @@ class GenericMatrixImporter:
                     limits=self.config.decompression_limits,
                 )
                 feat_meta_cols = list(feat_df.columns)
+                feat_df_cand = feat_df
             except Exception:  # noqa: BLE001
                 pass
 
@@ -542,6 +600,7 @@ class GenericMatrixImporter:
         detected_org: Organism | None = None
         detected_scheme: GeneIdScheme | None = None
 
+        cand_id_sources: list[list[str]] = []
         if matrix_kind != "MTX":
             try:
                 delim = "\t" if matrix_kind == "TSV" else ","
@@ -550,37 +609,45 @@ class GenericMatrixImporter:
                     limits=self.config.decompression_limits,
                     expected_delim=delim,
                 )
-                # Check candidate IDs in row 0 or column 0 for Ensembl detection
-                cand_ids = [str(x).strip() for x in df.iloc[:, 0].tolist()]
-                if cand_ids:
-                    if check_ensembl_species_conflict(cand_ids):
-                        inspection_issues.append(
-                            ScientificIssue(
-                                code=ScientificIssueCode.UNRESOLVED_SPECIES,
-                                severity=ScientificIssueSeverity.ERROR,
-                                message="Matrix identifier space contains conflicting Human and Mouse Ensembl IDs",
-                                userActionRequired=True,
-                            )
-                        )
-                        return ImportInspectionResult(
-                            datasetVersionId=version_id,
-                            sourceFormat=SourceFormat.GENERIC_MATRIX,
-                            status=InspectionStatus.INVALID,
-                            requiresMapping=False,
-                            availableCellMetadataColumns=cell_meta_cols,
-                            availableFeatureMetadataColumns=feat_meta_cols,
-                            issues=inspection_issues,
-                            cellCountEstimate=None,
-                            geneCountEstimate=None,
-                            detectedOrganism=None,
-                            detectedGeneIdScheme=None,
-                            referenceBuildCandidate=None,
-                        )
-                    detected_org = detect_ensembl_organism_candidates(cand_ids)
-                    if detected_org is not None:
-                        detected_scheme = GeneIdScheme.ENSEMBL
+                cand_id_sources.append([str(x).strip() for x in df.iloc[:, 0].tolist()])
+                cand_id_sources.append([str(c).strip() for c in df.columns[1:]])
             except Exception:  # noqa: BLE001
                 pass
+
+        if feat_df_cand is not None and len(feat_df_cand.columns) > 0:
+            cand_id_sources.append([str(x).strip() for x in feat_df_cand.iloc[:, 0].tolist()])
+
+        for cand_ids in cand_id_sources:
+            if not cand_ids:
+                continue
+            if check_ensembl_species_conflict(cand_ids):
+                inspection_issues.append(
+                    ScientificIssue(
+                        code=ScientificIssueCode.UNRESOLVED_SPECIES,
+                        severity=ScientificIssueSeverity.ERROR,
+                        message="Matrix identifier space contains conflicting Human and Mouse Ensembl IDs",
+                        userActionRequired=True,
+                    )
+                )
+                return ImportInspectionResult(
+                    datasetVersionId=version_id,
+                    sourceFormat=SourceFormat.GENERIC_MATRIX,
+                    status=InspectionStatus.INVALID,
+                    requiresMapping=False,
+                    availableCellMetadataColumns=cell_meta_cols,
+                    availableFeatureMetadataColumns=feat_meta_cols,
+                    issues=inspection_issues,
+                    cellCountEstimate=None,
+                    geneCountEstimate=None,
+                    detectedOrganism=None,
+                    detectedGeneIdScheme=None,
+                    referenceBuildCandidate=None,
+                )
+            org = detect_ensembl_organism_candidates(cand_ids)
+            if org is not None:
+                detected_org = org
+                detected_scheme = GeneIdScheme.ENSEMBL
+                break
 
         return ImportInspectionResult(
             datasetVersionId=version_id,
@@ -760,6 +827,12 @@ class GenericMatrixImporter:
         clean_cell_ids = validate_identifiers(raw_cell_ids, context="cell IDs")
         clean_gene_ids = validate_identifiers(raw_gene_ids, context="gene IDs")
 
+        if len(clean_gene_ids) != len(set(clean_gene_ids)):
+            raise CountValidationError(
+                "Duplicate gene identifiers found in expression matrix",
+                issue_code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
+            )
+
         assert (
             canonical_csr.shape
             == (
@@ -780,7 +853,7 @@ class GenericMatrixImporter:
                 issue_code=ScientificIssueCode.UNRESOLVED_SPECIES,
             )
 
-        # 4. Construct canonical obs and apply CELL_METADATA joins
+        # 4. Construct canonical obs and apply CELL_METADATA joins by value
         canonical_obs = pd.DataFrame(index=clean_cell_ids)
         cell_meta_files = source_set.get_files_by_role(ImportFileRole.CELL_METADATA)
 
@@ -810,9 +883,10 @@ class GenericMatrixImporter:
                     issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                 )
 
+            # Deterministic value join: realigns to exact clean_cell_ids order; ignores unreferenced rows
             realigned_cell_meta = cell_df.set_index(join_col).loc[clean_cell_ids]
 
-            # Sample mapping (Fail-Closed)
+            # Sample mapping (Strict CellWeave Authority — Fail-Closed)
             if mapping.sampleColumn:
                 if mapping.sampleColumn not in realigned_cell_meta.columns:
                     raise ImporterSecurityError(
@@ -902,11 +976,10 @@ class GenericMatrixImporter:
                     issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                 )
 
-        # 5. Construct canonical var and apply FEATURE_METADATA joins
+        # 5. Construct canonical var and apply FEATURE_METADATA joins by value
         final_gene_ids = clean_gene_ids
         canonical_var = pd.DataFrame(index=clean_gene_ids)
         canonical_var["source_feature_id"] = clean_gene_ids
-        canonical_var["gene_symbol"] = clean_gene_ids
 
         feat_meta_files = source_set.get_files_by_role(ImportFileRole.FEATURE_METADATA)
         if feat_meta_files:
@@ -914,7 +987,7 @@ class GenericMatrixImporter:
                 feat_meta_files[0].local_path, limits=self.config.decompression_limits
             )
 
-            # Find matching join column in feat_df
+            # Find matching join column in feat_df (strict value match, no positional join)
             gene_set = set(clean_gene_ids)
             join_col = None
             for col in feat_df.columns:
@@ -923,13 +996,10 @@ class GenericMatrixImporter:
                     break
 
             if join_col is None:
-                if len(feat_df) == len(clean_gene_ids):
-                    join_col = feat_df.columns[0]
-                else:
-                    raise ImporterSecurityError(
-                        "Cannot join FEATURE_METADATA to matrix: no matching feature identifier column found",
-                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
-                    )
+                raise ImporterSecurityError(
+                    "Cannot join FEATURE_METADATA to matrix: matrix features missing from metadata table",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
 
             if feat_df[join_col].duplicated().any():
                 raise CountValidationError(
@@ -937,6 +1007,7 @@ class GenericMatrixImporter:
                     issue_code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
                 )
 
+            # Deterministic value join: realigns to exact clean_gene_ids order; ignores unreferenced rows
             realigned_feat_meta = feat_df.set_index(join_col).loc[clean_gene_ids]
 
             # If mapping.geneIdColumn points to a stable ID column distinct from join_col
@@ -949,18 +1020,37 @@ class GenericMatrixImporter:
                 clean_stable_ids = validate_identifiers(
                     stable_ids, context="FEATURE_METADATA stable gene IDs"
                 )
+                if len(clean_stable_ids) != len(set(clean_stable_ids)):
+                    raise CountValidationError(
+                        "Duplicate stable gene identifiers in FEATURE_METADATA",
+                        issue_code=ScientificIssueCode.AMBIGUOUS_GENE_IDENTIFIERS,
+                    )
                 final_gene_ids = clean_stable_ids
                 canonical_var = pd.DataFrame(index=clean_stable_ids)
                 canonical_var["source_feature_id"] = clean_gene_ids
-                canonical_var["gene_symbol"] = clean_stable_ids
 
             # If mapping.geneSymbolColumn provides descriptive symbols
-            if mapping.geneSymbolColumn and mapping.geneSymbolColumn in realigned_feat_meta.columns:
+            if mapping.geneSymbolColumn:
+                if mapping.geneSymbolColumn not in realigned_feat_meta.columns:
+                    raise ImporterSecurityError(
+                        f"Requested geneSymbolColumn '{mapping.geneSymbolColumn}' not found in FEATURE_METADATA",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
                 canonical_var["gene_symbol"] = (
                     realigned_feat_meta[mapping.geneSymbolColumn].astype(str).tolist()
                 )
+        else:
+            if mapping.geneSymbolColumn:
+                raise ImporterSecurityError(
+                    "geneSymbolColumn mapping was requested, but no FEATURE_METADATA file was provided in source set",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
 
         # 6. Build and validate canonical AnnData
+        ref_build = (
+            mapping.referenceBuild if (mapping and mapping.referenceBuild) else reference_build
+        )
+
         canonical_adata = build_canonical_anndata(
             x=canonical_csr,
             obs=canonical_obs,
@@ -969,7 +1059,7 @@ class GenericMatrixImporter:
             var_names=final_gene_ids,
             organism=organism,
             gene_id_scheme=gene_id_scheme,
-            reference_build=reference_build,
+            reference_build=ref_build,
         )
 
         validate_canonical_anndata(
@@ -992,7 +1082,7 @@ class GenericMatrixImporter:
             cellCount=int(canonical_adata.n_obs),
             geneCount=int(canonical_adata.n_vars),
             warnings=[],
-            referenceBuild=reference_build,
+            referenceBuild=ref_build,
         )
 
 
