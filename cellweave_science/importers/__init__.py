@@ -63,6 +63,17 @@ from cellweave_science.importers.security import (
     validate_trusted_local_path,
 )
 from cellweave_science.importers.sources import ImportSourceFile, ImportSourceSet
+from cellweave_science.importers.tenx_h5 import TenxH5Importer
+from cellweave_science.importers.tenx_mtx import TenxMtxImporter
+from cellweave_science.importers.tenx_shared import (
+    GENE_EXPRESSION_MODALITY,
+    TenxFeature,
+    TenxImporterConfig,
+    parse_10x_barcodes,
+    parse_10x_features_tsv,
+    parse_10x_matrix_market,
+    validate_10x_features,
+)
 from cellweave_science.importers.validation import (
     CountClassification,
     check_ensembl_species_conflict,
@@ -112,6 +123,15 @@ __all__ = [
     # Protocols and sources
     "DatasetImporter",
     "H5ADImporter",
+    "TenxH5Importer",
+    "TenxMtxImporter",
+    "TenxImporterConfig",
+    "TenxFeature",
+    "GENE_EXPRESSION_MODALITY",
+    "parse_10x_barcodes",
+    "parse_10x_features_tsv",
+    "validate_10x_features",
+    "parse_10x_matrix_market",
     "ImportSourceFile",
     "ImportSourceSet",
     # Checksum primitives
