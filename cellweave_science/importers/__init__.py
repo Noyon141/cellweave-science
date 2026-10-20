@@ -46,6 +46,7 @@ from cellweave_science.importers.errors import (
     ImporterSecurityError,
     MalformedCompressedStreamError,
 )
+from cellweave_science.importers.h5ad import H5ADImporter
 from cellweave_science.importers.security import (
     GZIP_MAGIC,
     HDF5_MAGIC,
@@ -108,6 +109,7 @@ __all__ = [
     "SourceFormat",
     # Protocols and sources
     "DatasetImporter",
+    "H5ADImporter",
     "ImportSourceFile",
     "ImportSourceSet",
     # Checksum primitives

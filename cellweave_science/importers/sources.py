@@ -28,6 +28,7 @@ class ImportSourceSet:
 
     source_format: SourceFormat
     files: tuple[ImportSourceFile, ...]
+    dataset_version_id: str = ""
 
     def get_primary_file(self) -> ImportSourceFile:
         """Retrieve the single PRIMARY file for single-file formats."""
