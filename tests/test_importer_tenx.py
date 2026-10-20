@@ -1660,10 +1660,13 @@ def test_10x_canonicalize_no_sample_mapping_zero_obs_columns(tmp_path: Path) -> 
     assert list(adata_h5.obs_names) == ["CELL_01", "CELL_02"]
 
 
-def test_10x_canonicalize_with_explicit_sample_mapping(tmp_path: Path) -> None:
-    """Case B: When explicit sample mapping is supplied, canonical obs maps exact values."""
+def test_10x_sample_mapping_inapplicable_fails_closed(tmp_path: Path) -> None:
+    """10x sources have no source sample dimension; barcode is not sample identity.
+    Passing sampleMappings fails closed with MISSING_REQUIRED_METADATA.
+    """
+    # 1. TenxMtxImporter
     mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
-        tmp_path / "case_b_mtx",
+        tmp_path / "inapp_mtx",
         features=[("ENSG00000141510", "TP53", "Gene Expression")],
         barcodes=["CELL_01", "CELL_02"],
         entries=[(1, 1, 10), (1, 2, 20)],
@@ -1675,10 +1678,10 @@ def test_10x_canonicalize_with_explicit_sample_mapping(tmp_path: Path) -> None:
             ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
             ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
         ),
-        dataset_version_id="dsv_case_b",
+        dataset_version_id="dsv_inapp_mtx",
     )
     mapping = MetadataMappingSubmission(
-        datasetVersionId="dsv_case_b",
+        datasetVersionId="dsv_inapp_mtx",
         organism=Organism.HUMAN,
         geneIdScheme=GeneIdScheme.ENSEMBL,
         sampleMappings=[
@@ -1686,25 +1689,21 @@ def test_10x_canonicalize_with_explicit_sample_mapping(tmp_path: Path) -> None:
             SampleMappingEntry(sourceValue="CELL_02", sampleKey="Donor_Control"),
         ],
     )
-    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
-    out_mtx = tmp_path / "canonical_case_b_mtx.h5ad"
-    importer.canonicalize(
-        source_set=src_mtx,
-        output_path=str(out_mtx),
-        organism=Organism.HUMAN,
-        gene_id_scheme=GeneIdScheme.ENSEMBL,
-        mapping=mapping,
-    )
-    adata = ad.read_h5ad(out_mtx)
-    assert "sample_key" in adata.obs.columns
-    assert list(adata.obs["sample_key"]) == ["Donor_Treated", "Donor_Control"]
-    assert "SMP_001" not in adata.obs["sample_key"].values
+    importer_mtx = TenxMtxImporter(DEFAULT_TEST_CONFIG)
+    out_mtx = tmp_path / "canonical_inapp_mtx.h5ad"
+    with pytest.raises(ImporterSecurityError) as exc_info_mtx:
+        importer_mtx.canonicalize(
+            source_set=src_mtx,
+            output_path=str(out_mtx),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+    assert exc_info_mtx.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
 
-
-def test_10x_canonicalize_with_single_library_sample_mapping(tmp_path: Path) -> None:
-    """When a single sample mapping is provided for a 10x run, all cells map to that sample key."""
+    # 2. TenxH5Importer
     p_h5 = create_synthetic_10x_h5(
-        tmp_path / "case_b_single.h5",
+        tmp_path / "inapp_h5.h5",
         features=[("ENSG00000141510", "TP53", "Gene Expression")],
         barcodes=["CELL_01", "CELL_02"],
         data=np.array([10, 20], dtype=np.int32),
@@ -1714,28 +1713,129 @@ def test_10x_canonicalize_with_single_library_sample_mapping(tmp_path: Path) -> 
     src_h5 = ImportSourceSet(
         SourceFormat.TENX_H5,
         (ImportSourceFile("h1", ImportFileRole.PRIMARY, p_h5),),
-        dataset_version_id="dsv_single",
+        dataset_version_id="dsv_inapp_h5",
+    )
+    importer_h5 = TenxH5Importer()
+    out_h5 = tmp_path / "canonical_inapp_h5.h5ad"
+    with pytest.raises(ImporterSecurityError) as exc_info_h5:
+        importer_h5.canonicalize(
+            source_set=src_h5,
+            output_path=str(out_h5),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+    assert exc_info_h5.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+
+def test_10x_single_mapping_not_global_fails_closed(tmp_path: Path) -> None:
+    """A single SampleMappingEntry does NOT infer a library-level sample assignment.
+    Plain 10x sources have no source sample dimension, so importer fails closed.
+    """
+    p_h5 = create_synthetic_10x_h5(
+        tmp_path / "single_not_global.h5",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["CELL_01", "CELL_02"],
+        data=np.array([10, 20], dtype=np.int32),
+        indices=np.array([0, 0], dtype=np.int32),
+        indptr=np.array([0, 1, 2], dtype=np.int32),
+    )
+    src_h5 = ImportSourceSet(
+        SourceFormat.TENX_H5,
+        (ImportSourceFile("h1", ImportFileRole.PRIMARY, p_h5),),
+        dataset_version_id="dsv_single_test",
     )
     mapping = MetadataMappingSubmission(
-        datasetVersionId="dsv_single",
+        datasetVersionId="dsv_single_test",
         organism=Organism.HUMAN,
         geneIdScheme=GeneIdScheme.ENSEMBL,
         sampleMappings=[
-            SampleMappingEntry(sourceValue="run_10x_library", sampleKey="Patient_Alpha"),
+            SampleMappingEntry(sourceValue="library_1", sampleKey="Patient_Alpha"),
         ],
     )
     importer = TenxH5Importer()
-    out_h5 = tmp_path / "canonical_single_mapping.h5ad"
+    out_h5 = tmp_path / "canonical_single_not_global.h5ad"
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer.canonicalize(
+            source_set=src_h5,
+            output_path=str(out_h5),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+
+def test_10x_sample_column_inapplicable_fails_closed(tmp_path: Path) -> None:
+    """10x sources do not have cell metadata columns; sampleColumn request fails closed."""
+    p_h5 = create_synthetic_10x_h5(
+        tmp_path / "sample_col_h5.h5",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["CELL_01", "CELL_02"],
+        data=np.array([10, 20], dtype=np.int32),
+        indices=np.array([0, 0], dtype=np.int32),
+        indptr=np.array([0, 1, 2], dtype=np.int32),
+    )
+    src = ImportSourceSet(
+        SourceFormat.TENX_H5,
+        (ImportSourceFile("h1", ImportFileRole.PRIMARY, p_h5),),
+        dataset_version_id="dsv_col_test",
+    )
+    mapping = MetadataMappingSubmission(
+        datasetVersionId="dsv_col_test",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        sampleColumn="donor",
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        TenxH5Importer().canonicalize(
+            source_set=src,
+            output_path=str(tmp_path / "out_col.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+
+def test_10x_mapping_without_cell_mappings_succeeds(tmp_path: Path) -> None:
+    """MetadataMappingSubmission with confirmed organism and geneIdScheme but NO inapplicable
+    cell mappings canonicalizes cleanly with shape (n_cells, 0) and no sample_key.
+    """
+    mtx_p, feat_p, bc_p = create_synthetic_10x_mtx(
+        tmp_path / "clean_meta_mtx",
+        features=[("ENSG00000141510", "TP53", "Gene Expression")],
+        barcodes=["CELL_01", "CELL_02"],
+        entries=[(1, 1, 10), (1, 2, 20)],
+    )
+    src_mtx = ImportSourceSet(
+        SourceFormat.TENX_MTX,
+        (
+            ImportSourceFile("m1", ImportFileRole.MATRIX, mtx_p),
+            ImportSourceFile("f1", ImportFileRole.FEATURES, feat_p),
+            ImportSourceFile("b1", ImportFileRole.BARCODES, bc_p),
+        ),
+        dataset_version_id="dsv_clean_meta",
+    )
+    mapping = MetadataMappingSubmission(
+        datasetVersionId="dsv_clean_meta",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        referenceBuild="GRCh38",
+    )
+    importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
+    out_mtx = tmp_path / "canonical_clean_meta.h5ad"
     importer.canonicalize(
-        source_set=src_h5,
-        output_path=str(out_h5),
+        source_set=src_mtx,
+        output_path=str(out_mtx),
         organism=Organism.HUMAN,
         gene_id_scheme=GeneIdScheme.ENSEMBL,
         mapping=mapping,
     )
-    adata = ad.read_h5ad(out_h5)
-    assert "sample_key" in adata.obs.columns
-    assert list(adata.obs["sample_key"]) == ["Patient_Alpha", "Patient_Alpha"]
+    adata = ad.read_h5ad(out_mtx)
+    assert adata.obs.shape == (2, 0)
+    assert "sample_key" not in adata.obs.columns
+    assert list(adata.obs_names) == ["CELL_01", "CELL_02"]
 
 
 def test_10x_inspect_missing_dataset_version_id_fails_controlled(tmp_path: Path) -> None:

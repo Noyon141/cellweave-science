@@ -752,36 +752,73 @@ class H5ADImporter:
     ) -> None:
         """Map approved cell metadata columns (sampleKey, condition, batch, replicates)."""
         # 1. Sample key mapping
-        if mapping.sampleColumn and mapping.sampleColumn in source_obs.columns:
+        if mapping.sampleColumn:
+            if mapping.sampleColumn not in source_obs.columns:
+                raise ImporterSecurityError(
+                    f"Requested sampleColumn '{mapping.sampleColumn}' not found in source cell metadata",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
             source_vals = source_obs[mapping.sampleColumn].astype(str).tolist()
-            if mapping.sampleMappings:
-                map_dict = {m.sourceValue: m.sampleKey for m in mapping.sampleMappings}
-                canonical_obs["sample_key"] = [map_dict.get(v, v) for v in source_vals]
-            else:
-                canonical_obs["sample_key"] = source_vals
+            if not mapping.sampleMappings:
+                raise ImporterSecurityError(
+                    f"sampleColumn '{mapping.sampleColumn}' provided without approved sampleMappings; "
+                    "source values cannot pass through automatically as sample keys",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+            map_dict = {m.sourceValue: m.sampleKey for m in mapping.sampleMappings}
+            mapped_keys: list[str] = []
+            for v in source_vals:
+                target_key = map_dict.get(v)
+                if not target_key or not target_key.strip():
+                    raise ImporterSecurityError(
+                        f"Incomplete sample mapping: source value '{v}' in column '{mapping.sampleColumn}' "
+                        "has no approved SampleMappingEntry",
+                        issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                    )
+                mapped_keys.append(target_key.strip())
+            canonical_obs["sample_key"] = mapped_keys
+        elif mapping.sampleMappings:
+            raise ImporterSecurityError(
+                "sampleMappings provided without a corresponding sampleColumn",
+                issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+            )
 
         # 2. Biological condition
-        if mapping.conditionColumn and mapping.conditionColumn in source_obs.columns:
+        if mapping.conditionColumn:
+            if mapping.conditionColumn not in source_obs.columns:
+                raise ImporterSecurityError(
+                    f"Requested conditionColumn '{mapping.conditionColumn}' not found in source cell metadata",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
             canonical_obs["condition"] = source_obs[mapping.conditionColumn].astype(str).tolist()
 
         # 3. Batch
-        if mapping.batchColumn and mapping.batchColumn in source_obs.columns:
+        if mapping.batchColumn:
+            if mapping.batchColumn not in source_obs.columns:
+                raise ImporterSecurityError(
+                    f"Requested batchColumn '{mapping.batchColumn}' not found in source cell metadata",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
             canonical_obs["batch"] = source_obs[mapping.batchColumn].astype(str).tolist()
 
         # 4. Biological replicate
-        if (
-            mapping.biologicalReplicateColumn
-            and mapping.biologicalReplicateColumn in source_obs.columns
-        ):
+        if mapping.biologicalReplicateColumn:
+            if mapping.biologicalReplicateColumn not in source_obs.columns:
+                raise ImporterSecurityError(
+                    f"Requested biologicalReplicateColumn '{mapping.biologicalReplicateColumn}' not found in source cell metadata",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
             canonical_obs["biological_replicate"] = (
                 source_obs[mapping.biologicalReplicateColumn].astype(str).tolist()
             )
 
         # 5. Technical replicate
-        if (
-            mapping.technicalReplicateColumn
-            and mapping.technicalReplicateColumn in source_obs.columns
-        ):
+        if mapping.technicalReplicateColumn:
+            if mapping.technicalReplicateColumn not in source_obs.columns:
+                raise ImporterSecurityError(
+                    f"Requested technicalReplicateColumn '{mapping.technicalReplicateColumn}' not found in source cell metadata",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
             canonical_obs["technical_replicate"] = (
                 source_obs[mapping.technicalReplicateColumn].astype(str).tolist()
             )

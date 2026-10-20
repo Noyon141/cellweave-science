@@ -600,40 +600,45 @@ class TenxH5Importer:
         clean_obs_names = validate_identifiers(clean_barcodes, context="barcodes (obs_names)")
         canonical_obs = pd.DataFrame(index=clean_obs_names)
 
-        # Apply metadata mapping only if explicitly supplied by caller (zero synthetic columns by default)
+        # 10x sources do not provide a cell-level sample metadata dimension.
+        # Fail closed if mapping contains inapplicable sample mappings or cell metadata columns.
         if mapping is not None:
-            if mapping.sampleMappings:
-                map_dict = {m.sourceValue: m.sampleKey for m in mapping.sampleMappings}
-                if mapping.sampleColumn and mapping.sampleColumn in canonical_obs.columns:
-                    source_vals = canonical_obs[mapping.sampleColumn].astype(str).tolist()
-                    canonical_obs["sample_key"] = [map_dict.get(v, v) for v in source_vals]
-                elif any(bc in map_dict for bc in clean_obs_names):
-                    canonical_obs["sample_key"] = [map_dict.get(bc, "") for bc in clean_obs_names]
-                elif len(mapping.sampleMappings) == 1:
-                    canonical_obs["sample_key"] = mapping.sampleMappings[0].sampleKey
-            elif mapping.sampleColumn and mapping.sampleColumn in canonical_obs.columns:
-                canonical_obs["sample_key"] = (
-                    canonical_obs[mapping.sampleColumn].astype(str).tolist()
+            if mapping.sampleColumn:
+                raise ImporterSecurityError(
+                    f"Cannot apply sampleColumn '{mapping.sampleColumn}' to 10x dataset: "
+                    "10x H5 format does not provide cell metadata columns",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                 )
-
-            if mapping.conditionColumn and mapping.conditionColumn in canonical_obs.columns:
-                canonical_obs["condition"] = canonical_obs[mapping.conditionColumn].astype(str)
-            if mapping.batchColumn and mapping.batchColumn in canonical_obs.columns:
-                canonical_obs["batch"] = canonical_obs[mapping.batchColumn].astype(str)
-            if (
-                mapping.biologicalReplicateColumn
-                and mapping.biologicalReplicateColumn in canonical_obs.columns
-            ):
-                canonical_obs["biological_replicate"] = canonical_obs[
-                    mapping.biologicalReplicateColumn
-                ].astype(str)
-            if (
-                mapping.technicalReplicateColumn
-                and mapping.technicalReplicateColumn in canonical_obs.columns
-            ):
-                canonical_obs["technical_replicate"] = canonical_obs[
-                    mapping.technicalReplicateColumn
-                ].astype(str)
+            if mapping.sampleMappings:
+                raise ImporterSecurityError(
+                    "Cannot apply sampleMappings to 10x dataset: "
+                    "10x H5 format does not provide a source sample dimension; barcodes are cell identities, not sample identities",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+            if mapping.conditionColumn:
+                raise ImporterSecurityError(
+                    f"Cannot apply conditionColumn '{mapping.conditionColumn}' to 10x dataset: "
+                    "10x H5 format does not provide cell metadata columns",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+            if mapping.batchColumn:
+                raise ImporterSecurityError(
+                    f"Cannot apply batchColumn '{mapping.batchColumn}' to 10x dataset: "
+                    "10x H5 format does not provide cell metadata columns",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+            if mapping.biologicalReplicateColumn:
+                raise ImporterSecurityError(
+                    f"Cannot apply biologicalReplicateColumn '{mapping.biologicalReplicateColumn}' to 10x dataset: "
+                    "10x H5 format does not provide cell metadata columns",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
+            if mapping.technicalReplicateColumn:
+                raise ImporterSecurityError(
+                    f"Cannot apply technicalReplicateColumn '{mapping.technicalReplicateColumn}' to 10x dataset: "
+                    "10x H5 format does not provide cell metadata columns",
+                    issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
+                )
 
         # 6. Build canonical AnnData via format-neutral Step D builder
         canonical_adata = build_canonical_anndata(

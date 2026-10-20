@@ -581,6 +581,81 @@ def test_metadata_mapping_application(tmp_path: Path) -> None:
     assert list(c_adata.obs["batch"]) == ["b1", "b2"]
 
 
+def test_unmapped_source_must_never_pass_through(tmp_path: Path) -> None:
+    """Source value 'Donor_A' without an explicit mapping NEVER becomes sample_key = 'Donor_A'."""
+    p = tmp_path / "unmapped_source.h5ad"
+    ad.AnnData(
+        X=sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32),
+        obs=pd.DataFrame(index=["c1", "c2"], data={"donor": ["Donor_A", "Donor_B"]}),
+        var=pd.DataFrame(index=["ENSG1", "ENSG2"]),
+    ).write_h5ad(p)
+
+    src = ImportSourceSet(
+        SourceFormat.H5AD,
+        files=(ImportSourceFile("f1", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_test",
+    )
+    importer = H5ADImporter()
+
+    # sampleColumn provided but sampleMappings is None/empty
+    mapping = MetadataMappingSubmission(
+        datasetVersionId="dsv_test",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        sampleColumn="donor",
+        sampleMappings=None,
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer.canonicalize(
+            source_set=src,
+            output_path=str(tmp_path / "out_unmapped.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+
+
+def test_partial_mapping_fails_closed(tmp_path: Path) -> None:
+    """Partial mapping (Donor_A mapped, Donor_B unmapped) fails closed.
+    Does NOT produce SMP_EXISTING_A + Donor_B, and does NOT produce SMP_EXISTING_A + ''.
+    """
+    p = tmp_path / "partial_source.h5ad"
+    ad.AnnData(
+        X=sp.csr_matrix([[1, 2], [3, 4]], dtype=np.int32),
+        obs=pd.DataFrame(index=["c1", "c2"], data={"donor": ["Donor_A", "Donor_B"]}),
+        var=pd.DataFrame(index=["ENSG1", "ENSG2"]),
+    ).write_h5ad(p)
+
+    src = ImportSourceSet(
+        SourceFormat.H5AD,
+        files=(ImportSourceFile("f1", ImportFileRole.PRIMARY, p),),
+        dataset_version_id="dsv_test",
+    )
+    importer = H5ADImporter()
+
+    # Map only Donor_A
+    mapping = MetadataMappingSubmission(
+        datasetVersionId="dsv_test",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        sampleColumn="donor",
+        sampleMappings=[
+            SampleMappingEntry(sourceValue="Donor_A", sampleKey="SMP_EXISTING_A"),
+        ],
+    )
+    with pytest.raises(ImporterSecurityError) as exc_info:
+        importer.canonicalize(
+            source_set=src,
+            output_path=str(tmp_path / "out_partial.h5ad"),
+            organism=Organism.HUMAN,
+            gene_id_scheme=GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+    assert exc_info.value.issue_code == ScientificIssueCode.MISSING_REQUIRED_METADATA
+    assert "Donor_B" in str(exc_info.value)
+
+
 def test_source_immutability(tmp_path: Path) -> None:
     """Canonicalization does not mutate the source H5AD file."""
     p = tmp_path / "source_immut.h5ad"
