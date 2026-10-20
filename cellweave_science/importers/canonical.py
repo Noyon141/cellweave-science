@@ -128,7 +128,7 @@ def validate_canonical_anndata(
     3. adata.X is a SciPy CSR sparse matrix.
     4. adata.X data passes raw count validation (non-negative, finite, integers).
     5. obs_names and var_names are unique and non-empty.
-    6. Expected organism and gene ID scheme are present if specified.
+    6. Expected organism and gene ID scheme are present if specified and match supported enums.
     7. Slot hygiene: layers is empty (no premature counts layer), obsm is empty.
 
     Raises:
@@ -168,20 +168,39 @@ def validate_canonical_anndata(
             "Canonical AnnData in Phase 3 must store raw counts strictly in X, not in layers['counts']"
         )
 
-    # Organism and gene ID scheme checks
-    if expected_organism is not None:
-        stored_org = adata.uns.get("organism")
-        if stored_org != expected_organism.value:
+    # Organism check
+    stored_org = adata.uns.get("organism")
+    if stored_org is not None:
+        supported_orgs = {e.value for e in Organism}
+        if stored_org not in supported_orgs:
+            raise CanonicalValidationError(
+                f"Unsupported organism in uns['organism']: {stored_org!r} (supported: {supported_orgs})"
+            )
+        if expected_organism is not None and stored_org != expected_organism.value:
             raise CanonicalValidationError(
                 f"Expected organism {expected_organism.value}, found {stored_org}"
             )
+    elif expected_organism is not None:
+        raise CanonicalValidationError(
+            f"Expected organism {expected_organism.value}, but uns['organism'] is not set"
+        )
 
-    if expected_gene_id_scheme is not None:
-        stored_scheme = adata.uns.get("gene_id_scheme")
-        if stored_scheme != expected_gene_id_scheme.value:
+    # Gene ID scheme check
+    stored_scheme = adata.uns.get("gene_id_scheme")
+    if stored_scheme is not None:
+        supported_schemes = {e.value for e in GeneIdScheme}
+        if stored_scheme not in supported_schemes:
+            raise CanonicalValidationError(
+                f"Unsupported gene ID scheme in uns['gene_id_scheme']: {stored_scheme!r} (supported: {supported_schemes})"
+            )
+        if expected_gene_id_scheme is not None and stored_scheme != expected_gene_id_scheme.value:
             raise CanonicalValidationError(
                 f"Expected gene ID scheme {expected_gene_id_scheme.value}, found {stored_scheme}"
             )
+    elif expected_gene_id_scheme is not None:
+        raise CanonicalValidationError(
+            f"Expected gene ID scheme {expected_gene_id_scheme.value}, but uns['gene_id_scheme'] is not set"
+        )
 
 
 __all__ = [

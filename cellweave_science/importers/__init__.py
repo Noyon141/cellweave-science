@@ -10,8 +10,8 @@ Provides shared primitives for:
 - streaming SHA-256 and deterministic aggregate sourceChecksum;
 - physical file inspection and magic-byte detection;
 - bounded decompression and path security;
-- count matrix and sparse matrix validation;
-- identifier validation and species detection;
+- count matrix classification (VALID_COUNTS, NOT_COUNTS, AMBIGUOUS) and sparse safety;
+- identifier validation and conservative species detection;
 - canonical AnnData construction and validation conforming to Policy B.
 """
 
@@ -44,16 +44,15 @@ from cellweave_science.importers.errors import (
     CountValidationError,
     DecompressionLimitError,
     ImporterSecurityError,
-    MalformedArchiveError,
+    MalformedCompressedStreamError,
 )
 from cellweave_science.importers.security import (
-    DEFAULT_MAX_COMPRESSION_RATIO,
-    DEFAULT_MAX_UNCOMPRESSED_BYTES,
     GZIP_MAGIC,
     HDF5_MAGIC,
     MATRIX_MARKET_MAGIC,
     STREAM_CHUNK_SIZE,
     CompressionFormat,
+    DecompressionLimits,
     PhysicalContainerFormat,
     PhysicalInspectionResult,
     detect_compression,
@@ -64,7 +63,8 @@ from cellweave_science.importers.security import (
 )
 from cellweave_science.importers.sources import ImportSourceFile, ImportSourceSet
 from cellweave_science.importers.validation import (
-    FLOAT_INTEGER_TOLERANCE,
+    CountClassification,
+    classify_count_matrix,
     detect_ensembl_organism_candidates,
     ensure_csr_matrix,
     validate_count_matrix,
@@ -119,11 +119,10 @@ __all__ = [
     "HDF5_MAGIC",
     "GZIP_MAGIC",
     "MATRIX_MARKET_MAGIC",
-    "DEFAULT_MAX_UNCOMPRESSED_BYTES",
-    "DEFAULT_MAX_COMPRESSION_RATIO",
     "STREAM_CHUNK_SIZE",
     "CompressionFormat",
     "PhysicalContainerFormat",
+    "DecompressionLimits",
     "PhysicalInspectionResult",
     "validate_trusted_local_path",
     "detect_compression",
@@ -131,7 +130,8 @@ __all__ = [
     "inspect_physical_file",
     "open_bounded_gzip_stream",
     # Validation primitives
-    "FLOAT_INTEGER_TOLERANCE",
+    "CountClassification",
+    "classify_count_matrix",
     "validate_count_matrix",
     "ensure_csr_matrix",
     "validate_identifiers",
@@ -143,7 +143,7 @@ __all__ = [
     # Errors
     "ImporterSecurityError",
     "DecompressionLimitError",
-    "MalformedArchiveError",
+    "MalformedCompressedStreamError",
     "CountValidationError",
     "CanonicalValidationError",
 ]

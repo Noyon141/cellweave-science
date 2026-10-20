@@ -49,25 +49,32 @@ Importers calculate two distinct checksum layers:
   - Both `H5AD` and `TENX_H5` share the HDF5 container signature. Physical inspection identifies `HDF5`; format-specific semantic qualification occurs in subsequent importer steps.
 - Bounded decompression (`open_bounded_gzip_stream`):
   - Streams decompressed chunks (64 KiB) without whole-file buffering.
-  - Enforces `max_uncompressed_bytes` (default 50 GiB) and `max_compression_ratio` (default 250.0) to prevent decompression bombs.
+  - Supports configurable `DecompressionLimits(max_uncompressed_bytes, max_compression_ratio)`.
+  - Distinguishes technical stream safety from business upload policy: Phase 2 owns commercial upload size limits, while Step D primitives guard against stream decompression bombs.
+  - Malformed or corrupt compressed streams raise `MalformedCompressedStreamError`.
 
 ---
 
 ## 4. Path & Symlink Security (`validate_trusted_local_path`)
 - All local inputs are verified to be existing, regular files.
+- Rejects directories with `ImporterSecurityError`.
 - Rejects symbolic links by default to prevent arbitrary file access or escape.
 - Rejects path strings containing null bytes (`\x00`).
 
 ---
 
-## 5. Raw Count Validation Primitive (`validate_count_matrix`)
-- Validates that matrix values qualify as raw, unnormalized counts:
-  1. **Finite**: No `NaN`, `+Inf`, `-Inf`.
-  2. **Non-negative**: Values must be $\ge 0$.
-  3. **Integral**:
-     - Exact integer dtypes (`np.integer`) are accepted.
-     - Floating-point dtypes (`np.floating`) are accepted **only** if every non-zero value satisfies $|x - \text{round}(x)| \le 10^{-5}$ (`FLOAT_INTEGER_TOLERANCE`). Normalized, log-transformed, or continuous data is strictly rejected with `CountValidationError(issue_code=NON_COUNT_INPUT)`.
-  4. **Sparse Safety**: Evaluates directly on `matrix.data` without calling `.toarray()` or densifying into memory.
+## 5. Raw Count Classification & Validation Model (`classify_count_matrix`, `validate_count_matrix`)
+- Expressed via internal `CountClassification` enum:
+  - `VALID_COUNTS`:
+    - Non-negative, finite integer dtypes (`np.integer`).
+    - Non-negative, finite floating dtypes where all values equal their exact mathematical integer conversion (e.g. `0.0`, `1.0`).
+  - `AMBIGUOUS`:
+    - Floating-point values with tiny non-zero differences within machine epsilon limits ($10 \times \epsilon$). They are not silently accepted as valid raw counts.
+    - Yields `CountValidationError(issue_code=AMBIGUOUS_COUNT_SEMANTICS)`.
+  - `NOT_COUNTS`:
+    - Matrices containing `NaN`, `+Inf`, `-Inf`, negative numbers, or clearly fractional continuous values (e.g. log-normalized).
+    - Yields `CountValidationError(issue_code=NON_COUNT_INPUT)`.
+- **Sparse Safety**: Evaluates directly on `matrix.data` without calling `.toarray()` or densifying into memory.
 
 ---
 
@@ -80,12 +87,14 @@ Importers calculate two distinct checksum layers:
 
 ---
 
-## 7. Ensembl Candidate & Organism Detection (`detect_ensembl_organism_candidates`)
-- Human candidate: `^ENSG\d+(\.\d+)?$`
-- Mouse candidate: `^ENSMUSG\d+(\.\d+)?$`
-- If $\ge 50\%$ match human and 0% match mouse: candidate is `Organism.HUMAN`.
-- If $\ge 50\%$ match mouse and 0% match human: candidate is `Organism.MOUSE`.
-- Mixed or gene symbol identifiers return `None` (unresolved). Organism is never guessed from file names or gene symbols alone.
+## 7. Deterministic Ensembl Candidate & Organism Detection (`detect_ensembl_organism_candidates`)
+- Consistently human: All identifiers match `^ENSG\d+(\.\d+)?$` $\rightarrow$ `Organism.HUMAN`.
+- Consistently mouse: All identifiers match `^ENSMUSG\d+(\.\d+)?$` $\rightarrow$ `Organism.MOUSE`.
+- Mixed prefixes (human + mouse) $\rightarrow$ `None` (unresolved).
+- Mixed prefixes with gene symbols or random IDs $\rightarrow$ `None` (unresolved).
+- Symbol-only or empty identifiers $\rightarrow$ `None` (unresolved).
+- Version suffix (e.g. `.7`, `.15`) is tolerated solely for prefix detection; identifiers are not stripped or altered.
+- Zero arbitrary or probabilistic thresholds are employed.
 
 ---
 
@@ -95,7 +104,7 @@ Importers calculate two distinct checksum layers:
   - `TENX_H5`: Exactly 1 `PRIMARY`.
   - `TENX_MTX`: Exactly 1 `MATRIX`, 1 `FEATURES`, 1 `BARCODES` (3 files total).
   - `GENERIC_MATRIX`: Exactly 1 `MATRIX`, 0..1 `CELL_METADATA`, 0..1 `FEATURE_METADATA`.
-- Unrelated roles or missing mandatory files yield `ScientificIssue` with `INVALID_IMPORT_CARDINALITY`.
+- Unrelated roles or missing mandatory files yield `ScientificIssue` with `INVALID_IMPORT_CARDINALITY`, `severity=ERROR`, `userActionRequired=True`.
 
 ---
 

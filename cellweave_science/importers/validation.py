@@ -1,12 +1,12 @@
 """Reusable scientific validation and normalization primitives for importer pipelines.
 
 Implements:
-- Count matrix validation (non-negative, finite, integral values, sparse-safe).
-- Integer-like float classification with explicitly defined numerical tolerance.
+- Count matrix validation and classification (VALID_COUNTS, NOT_COUNTS, AMBIGUOUS).
+- Machine precision check for floating integers (np.isclose / equal to floor).
 - SciPy sparse matrix normalization to CSR format without densification.
 - Matrix dimension and metadata alignment checks.
-- Identifier validation (uniqueness, non-empty, preservation of ordering).
-- Conservative Ensembl identifier candidate recognition and organism candidate detection.
+- Identifier validation (uniqueness, non-empty, preservation of ordering, no auto-renaming).
+- Conservative deterministic Ensembl organism candidate detection (consistent human vs mouse).
 - ImportSourceSet structural role cardinality validation.
 """
 
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -30,35 +31,79 @@ from cellweave_science.contracts import (
 from cellweave_science.importers.errors import CountValidationError
 from cellweave_science.importers.sources import ImportSourceSet
 
-# Conservative tolerance for checking if floating point values are integer counts:
-# A value x is considered an integer count if |x - round(x)| <= FLOAT_INTEGER_TOLERANCE.
-FLOAT_INTEGER_TOLERANCE = 1e-5
-
 # Ensembl regex patterns for candidate identification
+# Supports optional version suffix (e.g. .1, .15)
 _ENS_HUMAN_PATTERN = re.compile(r"^ENSG\d+(\.\d+)?$")
 _ENS_MOUSE_PATTERN = re.compile(r"^ENSMUSG\d+(\.\d+)?$")
 
 
+class CountClassification(str, Enum):
+    """Classification result for expression matrix raw count suitability."""
+
+    VALID_COUNTS = "VALID_COUNTS"
+    NOT_COUNTS = "NOT_COUNTS"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+def classify_count_matrix(
+    x: np.ndarray[Any, Any] | sp.spmatrix,
+) -> CountClassification:
+    """Classify matrix values for eligibility as raw unnormalized counts.
+
+    Invariants:
+    1. Operates on sparse_matrix.data directly without densifying into RAM.
+    2. Zero or non-finite (NaN, +/-Inf) or negative values => NOT_COUNTS.
+    3. Integer dtypes (non-negative, finite) => VALID_COUNTS.
+    4. Floating dtypes where all values equal their exact integer conversion (e.g. 0.0, 1.0) => VALID_COUNTS.
+    5. Floating dtypes with small non-zero differences within machine epsilon (e.g. 1e-12) => AMBIGUOUS.
+    6. Clearly continuous / fractional / normalized values => NOT_COUNTS.
+    """
+    if len(x.shape) != 2 or x.shape[0] <= 0 or x.shape[1] <= 0:
+        return CountClassification.NOT_COUNTS
+
+    if sp.issparse(x):
+        data = np.asarray(x.data)  # type: ignore[union-attr]
+        if data.size == 0:
+            return CountClassification.VALID_COUNTS
+    else:
+        data = np.asarray(x).ravel()
+
+    # 1. Finite check (detects NaN and +/-Inf)
+    if not np.all(np.isfinite(data)):
+        return CountClassification.NOT_COUNTS
+
+    # 2. Non-negative check
+    if np.any(data < 0):
+        return CountClassification.NOT_COUNTS
+
+    # 3. Exact integer dtype
+    if np.issubdtype(data.dtype, np.integer):
+        return CountClassification.VALID_COUNTS
+
+    # 4. Floating dtype inspection
+    if np.issubdtype(data.dtype, np.floating):
+        # Exact integral representation check
+        diff = np.abs(data - np.round(data))
+        if np.all(diff == 0.0):
+            return CountClassification.VALID_COUNTS
+
+        # Check if values are within machine-precision float limits
+        eps = float(np.finfo(data.dtype).eps) * 10.0
+        if np.all(diff <= eps):
+            return CountClassification.AMBIGUOUS
+
+        return CountClassification.NOT_COUNTS
+
+    return CountClassification.NOT_COUNTS
+
+
 def validate_count_matrix(
     x: np.ndarray[Any, Any] | sp.spmatrix,
-    *,
-    float_tolerance: float = FLOAT_INTEGER_TOLERANCE,
 ) -> None:
     """Validate that a matrix consists strictly of raw, unnormalized non-negative count data.
 
-    Invariants:
-    1. Sparse matrices are validated strictly on their .data buffer without densifying into RAM.
-    2. No NaN, +Inf, -Inf values.
-    3. No negative values.
-    4. Values must be integers or mathematically integer-like floats within float_tolerance.
-    5. Dimensions must be non-empty (shape > 0).
-
-    Args:
-        x: Dense 2D numpy array or SciPy sparse matrix.
-        float_tolerance: Absolute difference tolerance for floating numbers to qualify as integers.
-
     Raises:
-        CountValidationError: If any count invariant is violated.
+        CountValidationError: If values are NOT_COUNTS, AMBIGUOUS, or invalid dimensions.
     """
     if len(x.shape) != 2:
         raise CountValidationError(
@@ -73,44 +118,34 @@ def validate_count_matrix(
             issue_code=ScientificIssueCode.DIMENSION_MISMATCH,
         )
 
-    # Extract non-zero values for sparse or flatten for dense
-    if sp.issparse(x):
-        data = np.asarray(x.data)  # type: ignore[union-attr]
-        if data.size == 0:
-            # Entirely zero sparse matrix is technically valid non-negative integer counts
-            return
-    else:
-        data = np.asarray(x).ravel()
+    classification = classify_count_matrix(x)
 
-    # 1. Finite check (detects NaN and +/-Inf)
+    if classification == CountClassification.VALID_COUNTS:
+        return
+
+    if classification == CountClassification.AMBIGUOUS:
+        raise CountValidationError(
+            "Expression matrix values are near-integral but ambiguous; raw unnormalized counts cannot be verified",
+            issue_code=ScientificIssueCode.AMBIGUOUS_COUNT_SEMANTICS,
+        )
+
+    # Detailed reason check for NOT_COUNTS
+    data = np.asarray(x.data) if sp.issparse(x) else np.asarray(x).ravel()  # type: ignore[union-attr]
+
     if not np.all(np.isfinite(data)):
         raise CountValidationError(
             "Expression matrix contains NaN or Infinite values",
             issue_code=ScientificIssueCode.NON_COUNT_INPUT,
         )
 
-    # 2. Non-negative check
     if np.any(data < 0):
         raise CountValidationError(
             "Expression matrix contains negative expression values",
             issue_code=ScientificIssueCode.NON_COUNT_INPUT,
         )
 
-    # 3. Integral check
-    if np.issubdtype(data.dtype, np.integer):
-        return
-
-    if np.issubdtype(data.dtype, np.floating):
-        diff = np.abs(data - np.round(data))
-        if np.any(diff > float_tolerance):
-            raise CountValidationError(
-                "Expression matrix contains non-integral continuous float values (e.g. normalized or log-transformed)",
-                issue_code=ScientificIssueCode.NON_COUNT_INPUT,
-            )
-        return
-
     raise CountValidationError(
-        f"Unsupported matrix data type: {data.dtype}",
+        "Expression matrix contains non-integral continuous float values (e.g. normalized or log-transformed)",
         issue_code=ScientificIssueCode.NON_COUNT_INPUT,
     )
 
@@ -138,7 +173,7 @@ def validate_identifiers(
     1. Must not be empty.
     2. Elements must be non-empty strings (or losslessly convertible).
     3. Identifiers must be unique; duplicates are not silently tolerated.
-    4. Stable ordering is preserved.
+    4. Stable ordering is preserved without auto-deduplication or suffixing.
 
     Args:
         identifiers: Sequence of identifiers.
@@ -182,32 +217,40 @@ def validate_identifiers(
 def detect_ensembl_organism_candidates(identifiers: Sequence[str]) -> Organism | None:
     """Analyze gene identifiers to detect conservative species candidates based on Ensembl prefixes.
 
-    Rules:
-    - Overwhelming human (ENSG...): returns Organism.HOMO_SAPIENS
-    - Overwhelming mouse (ENSMUSG...): returns Organism.MUS_MUSCULUS
-    - Mixed or non-Ensembl (gene symbols only): returns None (unresolved).
+    Conservative deterministic policy:
+    1. If every identifier consistently matches human Ensembl prefix (ENSG...), returns Organism.HUMAN.
+    2. If every identifier consistently matches mouse Ensembl prefix (ENSMUSG...), returns Organism.MOUSE.
+    3. If both human and mouse Ensembl prefixes appear -> returns None (unresolved / mixed).
+    4. If Ensembl IDs are mixed with non-Ensembl/symbol identifiers -> returns None (unresolved / mixed).
+    5. Symbol-only or empty identifiers -> returns None (unresolved).
+    Version suffixes (e.g. .7, .12) are accepted for prefix matching but identifiers are not modified.
     """
     if not identifiers:
         return None
 
     human_count = 0
     mouse_count = 0
-    total = len(identifiers)
+    other_count = 0
 
     for gid in identifiers:
-        if _ENS_HUMAN_PATTERN.match(gid):
+        s = str(gid).strip()
+        if not s:
+            other_count += 1
+        elif _ENS_HUMAN_PATTERN.match(s):
             human_count += 1
-        elif _ENS_MOUSE_PATTERN.match(gid):
+        elif _ENS_MOUSE_PATTERN.match(s):
             mouse_count += 1
+        else:
+            other_count += 1
 
-    if human_count > 0 and mouse_count > 0:
-        # Mixed species detected -> Unresolved / Ambiguous
+    # Any mix with non-Ensembl symbols or between species makes organism candidate unresolved
+    if other_count > 0:
         return None
 
-    # If at least 50% match standard Ensembl prefix, consider candidate confirmed
-    if human_count / total >= 0.5:
+    if human_count > 0 and mouse_count == 0:
         return Organism.HUMAN
-    if mouse_count / total >= 0.5:
+
+    if mouse_count > 0 and human_count == 0:
         return Organism.MOUSE
 
     return None
@@ -285,7 +328,8 @@ def validate_import_source_set_cardinality(source_set: ImportSourceSet) -> list[
 
 
 __all__ = [
-    "FLOAT_INTEGER_TOLERANCE",
+    "CountClassification",
+    "classify_count_matrix",
     "validate_count_matrix",
     "ensure_csr_matrix",
     "validate_identifiers",

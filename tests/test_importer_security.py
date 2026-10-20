@@ -10,13 +10,14 @@ import pytest
 from cellweave_science.importers.errors import (
     DecompressionLimitError,
     ImporterSecurityError,
-    MalformedArchiveError,
+    MalformedCompressedStreamError,
 )
 from cellweave_science.importers.security import (
     GZIP_MAGIC,
     HDF5_MAGIC,
     MATRIX_MARKET_MAGIC,
     CompressionFormat,
+    DecompressionLimits,
     PhysicalContainerFormat,
     detect_compression,
     detect_physical_format,
@@ -66,11 +67,11 @@ def test_fake_gz_extension_plain_bytes(tmp_path: Path) -> None:
 
 
 def test_corrupt_gzip_file_fails(tmp_path: Path) -> None:
-    """File starting with gzip magic bytes but corrupt payload raises MalformedArchiveError."""
+    """File starting with gzip magic bytes but corrupt payload raises MalformedCompressedStreamError."""
     corrupt_gz = tmp_path / "corrupt.gz"
     corrupt_gz.write_bytes(GZIP_MAGIC + b"\x00\x00\x00corrupted_payload")
 
-    with pytest.raises(MalformedArchiveError, match="Corrupted or invalid gzip file"):
+    with pytest.raises(MalformedCompressedStreamError, match="Corrupted or invalid gzip file"):
         inspect_physical_file(corrupt_gz)
 
 
@@ -100,31 +101,59 @@ def test_bounded_gzip_stream_safe_read(tmp_path: Path) -> None:
     assert reconstructed == data
 
 
-def test_decompression_bomb_limit(tmp_path: Path) -> None:
-    """Exceeding max_uncompressed_bytes raises DecompressionLimitError."""
-    target = tmp_path / "bomb.gz"
-    huge_data = b"A" * (100 * 1024)  # 100 KiB
+def test_decompression_max_bytes_limit(tmp_path: Path) -> None:
+    """Exceeding small explicit max_uncompressed_bytes raises DecompressionLimitError without allocating huge files."""
+    target = tmp_path / "test_bytes.gz"
+    data = b"ABCDEFGHIJ" * 100  # 1000 bytes
     with gzip.open(target, "wb") as gz:
-        gz.write(huge_data)
+        gz.write(data)
 
-    # Set strict 10 KiB limit
-    with pytest.raises(DecompressionLimitError, match="Uncompressed size exceeded limit"):
-        for _ in open_bounded_gzip_stream(
-            target, max_uncompressed_bytes=10 * 1024, chunk_size=1024
-        ):
+    limits = DecompressionLimits(max_uncompressed_bytes=200)
+    with pytest.raises(
+        DecompressionLimitError, match="Uncompressed size exceeded limit of 200 bytes"
+    ):
+        for _ in open_bounded_gzip_stream(target, limits=limits, chunk_size=50):
             pass
 
 
-def test_validate_trusted_local_path_symlink_rejection(tmp_path: Path) -> None:
-    """Symbolic links are strictly prohibited by default."""
+def test_decompression_ratio_limit(tmp_path: Path) -> None:
+    """Exceeding explicit compression ratio limit triggers DecompressionLimitError."""
+    target = tmp_path / "bomb_ratio.gz"
+    # Repetitive zeros compress to tiny gzip
+    zeros = b"\x00" * 20000
+    with gzip.open(target, "wb") as gz:
+        gz.write(zeros)
+
+    limits = DecompressionLimits(max_compression_ratio=5.0)
+    with pytest.raises(DecompressionLimitError, match="Suspicious compression ratio"):
+        for _ in open_bounded_gzip_stream(target, limits=limits, chunk_size=512):
+            pass
+
+
+def test_validate_trusted_local_path_rejections(tmp_path: Path) -> None:
+    """Test path security: missing path, directory, symlink, null bytes."""
+    # 1. Missing path
+    missing = tmp_path / "non_existent.txt"
+    with pytest.raises(ImporterSecurityError, match="Target path does not exist"):
+        validate_trusted_local_path(missing)
+
+    # 2. Directory instead of file
+    directory = tmp_path / "some_dir"
+    directory.mkdir()
+    with pytest.raises(ImporterSecurityError, match="Target path is unexpectedly a directory"):
+        validate_trusted_local_path(directory)
+
+    # 3. Null byte injection
+    with pytest.raises(ImporterSecurityError, match="Null character in path string"):
+        validate_trusted_local_path("some/path\x00/file.txt")
+
+    # 4. Symlink rejection
     target_file = tmp_path / "target.txt"
     target_file.write_text("safe target", encoding="utf-8")
-
     symlink_file = tmp_path / "link.txt"
     try:
         symlink_file.symlink_to(target_file)
+        with pytest.raises(ImporterSecurityError, match="Symbolic links are strictly prohibited"):
+            validate_trusted_local_path(symlink_file)
     except OSError:
-        pytest.skip("Symlink creation not supported on this OS without privilege")
-
-    with pytest.raises(ImporterSecurityError, match="Symbolic links are strictly prohibited"):
-        validate_trusted_local_path(symlink_file)
+        pass  # Windows unprivileged symlink fallback

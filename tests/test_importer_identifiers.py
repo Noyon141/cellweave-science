@@ -20,7 +20,7 @@ def test_unique_cell_identifiers() -> None:
 
 
 def test_duplicate_cell_identifiers_rejected() -> None:
-    """Duplicate cell identifiers are rejected without silent auto-deduplication."""
+    """Duplicate cell identifiers are rejected without silent auto-deduplication or suffixing."""
     raw_cells = ["AAACCC1", "AAACCC2", "AAACCC1"]
     with pytest.raises(CountValidationError, match="Duplicate cell IDs found: 'AAACCC1'"):
         validate_identifiers(raw_cells, context="cell IDs")
@@ -33,22 +33,44 @@ def test_empty_or_whitespace_identifiers_rejected() -> None:
 
 
 def test_ensembl_human_candidates_detection() -> None:
-    """Ensembl human gene ID candidates (ENSG...) detect HUMAN."""
+    """Consistent unversioned human Ensembl gene IDs detect HUMAN."""
     genes = [
         "ENSG00000141510",
-        "ENSG00000139618.15",
+        "ENSG00000139618",
         "ENSG00000157764",
     ]
     detected = detect_ensembl_organism_candidates(genes)
     assert detected == Organism.HUMAN
 
 
+def test_ensembl_human_versioned_candidates_detection() -> None:
+    """Consistent versioned human Ensembl gene IDs detect HUMAN without stripping version."""
+    genes = [
+        "ENSG00000141510.16",
+        "ENSG00000139618.15",
+        "ENSG00000157764.10",
+    ]
+    detected = detect_ensembl_organism_candidates(genes)
+    assert detected == Organism.HUMAN
+
+
 def test_ensembl_mouse_candidates_detection() -> None:
-    """Ensembl mouse gene ID candidates (ENSMUSG...) detect MOUSE."""
+    """Consistent unversioned mouse Ensembl gene IDs detect MOUSE."""
     genes = [
         "ENSMUSG00000001234",
-        "ENSMUSG00000005678.3",
+        "ENSMUSG00000005678",
         "ENSMUSG00000009999",
+    ]
+    detected = detect_ensembl_organism_candidates(genes)
+    assert detected == Organism.MOUSE
+
+
+def test_ensembl_mouse_versioned_candidates_detection() -> None:
+    """Consistent versioned mouse Ensembl gene IDs detect MOUSE."""
+    genes = [
+        "ENSMUSG00000001234.3",
+        "ENSMUSG00000005678.8",
+        "ENSMUSG00000009999.1",
     ]
     detected = detect_ensembl_organism_candidates(genes)
     assert detected == Organism.MOUSE
@@ -59,6 +81,26 @@ def test_mixed_species_unresolved() -> None:
     mixed = [
         "ENSG00000141510",
         "ENSMUSG00000001234",
+    ]
+    detected = detect_ensembl_organism_candidates(mixed)
+    assert detected is None
+
+
+def test_ensembl_human_mixed_with_symbols_unresolved() -> None:
+    """Ensembl human IDs mixed with gene symbols in the same space return None."""
+    mixed = [
+        "ENSG00000141510",
+        "TP53",
+    ]
+    detected = detect_ensembl_organism_candidates(mixed)
+    assert detected is None
+
+
+def test_ensembl_mouse_mixed_with_symbols_unresolved() -> None:
+    """Ensembl mouse IDs mixed with gene symbols in the same space return None."""
+    mixed = [
+        "ENSMUSG00000001234",
+        "Trp53",
     ]
     detected = detect_ensembl_organism_candidates(mixed)
     assert detected is None

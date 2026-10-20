@@ -27,8 +27,8 @@ class DecompressionLimitError(ImporterSecurityError):
         super().__init__(message, issue_code=ScientificIssueCode.RESOURCE_LIMIT)
 
 
-class MalformedArchiveError(ImporterSecurityError):
-    """Raised when compressed streams or containers are corrupted or unreadable."""
+class MalformedCompressedStreamError(ImporterSecurityError):
+    """Raised when compressed streams (e.g. gzip) are corrupted or unreadable."""
 
     def __init__(self, message: str) -> None:
         super().__init__(message, issue_code=ScientificIssueCode.MALFORMED_INPUT)
@@ -55,7 +55,7 @@ class CanonicalValidationError(ValueError):
 __all__ = [
     "ImporterSecurityError",
     "DecompressionLimitError",
-    "MalformedArchiveError",
+    "MalformedCompressedStreamError",
     "CountValidationError",
     "CanonicalValidationError",
 ]

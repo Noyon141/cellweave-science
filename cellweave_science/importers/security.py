@@ -3,8 +3,8 @@
 Implements:
 - Physical file inspection (SHA-256, byteSize, compression, container/magic-byte detection).
 - Magic-byte detection (HDF5, GZIP, MatrixMarket).
-- Bounded streaming gzip decompression with safety limits against zip bombs.
-- Trusted local path validation rejecting directory traversal, absolute escapes, and symlinks.
+- Bounded streaming gzip decompression with caller-configurable safety limits against zip bombs.
+- Trusted local path validation rejecting directory traversal, non-regular files, directories, and symlinks.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from cellweave_science.importers.checksum import compute_file_sha256
 from cellweave_science.importers.errors import (
     DecompressionLimitError,
     ImporterSecurityError,
-    MalformedArchiveError,
+    MalformedCompressedStreamError,
 )
 
 # Magic bytes constants
@@ -27,11 +27,6 @@ HDF5_MAGIC = b"\x89HDF\r\n\x1a\n"
 GZIP_MAGIC = b"\x1f\x8b"
 MATRIX_MARKET_MAGIC = b"%%MatrixMarket"
 
-# Decompression security bounds
-DEFAULT_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024 * 1024  # 50 GiB max uncompressed limit
-DEFAULT_MAX_COMPRESSION_RATIO = (
-    250.0  # Max uncompressed / compressed ratio to avoid decompression bombs
-)
 STREAM_CHUNK_SIZE = 64 * 1024  # 64 KiB decompression chunks
 
 
@@ -49,6 +44,19 @@ class PhysicalContainerFormat(str, Enum):
     MATRIX_MARKET = "MATRIX_MARKET"
     DELIMITED_TEXT = "DELIMITED_TEXT"
     UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class DecompressionLimits:
+    """Configurable safety limits for stream decompression.
+
+    Notice: These are technical stream-decompression safety boundaries to guard against
+    decompression bombs and resource exhaustion. Phase 2 continues to own authoritative
+    product/commercial upload-size policies.
+    """
+
+    max_uncompressed_bytes: int | None = None
+    max_compression_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -79,21 +87,28 @@ def validate_trusted_local_path(
         Resolved Path instance.
 
     Raises:
-        ImporterSecurityError: If path does not exist, is not a regular file, or violates policy.
+        ImporterSecurityError: If path does not exist, is a directory, not a regular file, or violates policy.
     """
-    p = Path(path)
+    try:
+        p = Path(path)
+    except (TypeError, ValueError) as exc:
+        raise ImporterSecurityError(f"Invalid path representation: {exc}") from exc
+
+    # Check path string for null characters
+    if "\x00" in str(p):
+        raise ImporterSecurityError("Null character in path string")
+
     if not p.exists():
         raise ImporterSecurityError(f"Target path does not exist: {p}")
 
     if not allow_symlinks and p.is_symlink():
         raise ImporterSecurityError(f"Symbolic links are strictly prohibited: {p}")
 
+    if p.is_dir():
+        raise ImporterSecurityError(f"Target path is unexpectedly a directory: {p}")
+
     if not p.is_file():
         raise ImporterSecurityError(f"Target path is not a regular file: {p}")
-
-    # Check path string for null characters
-    if "\x00" in str(p):
-        raise ImporterSecurityError("Null character in path string")
 
     return p.resolve()
 
@@ -155,7 +170,9 @@ def inspect_physical_file(
                 inner_header = gz.read(max_header_bytes)
             detected_format = detect_physical_format(inner_header)
         except (gzip.BadGzipFile, OSError) as exc:
-            raise MalformedArchiveError(f"Corrupted or invalid gzip file at {path}: {exc}") from exc
+            raise MalformedCompressedStreamError(
+                f"Corrupted or invalid gzip file at {path}: {exc}"
+            ) from exc
     else:
         detected_format = detect_physical_format(header)
 
@@ -170,55 +187,61 @@ def inspect_physical_file(
 def open_bounded_gzip_stream(
     file_path: Path | str,
     *,
-    max_uncompressed_bytes: int = DEFAULT_MAX_UNCOMPRESSED_BYTES,
-    max_compression_ratio: float = DEFAULT_MAX_COMPRESSION_RATIO,
+    limits: DecompressionLimits | None = None,
     chunk_size: int = STREAM_CHUNK_SIZE,
 ) -> Generator[bytes, None, None]:
-    """Yield decompressed byte chunks from a gzip file with strict safety caps.
+    """Yield decompressed byte chunks from a gzip file with caller-configurable safety bounds.
 
     Guards against:
-    - Zip bombs (excessive compression ratio).
+    - Decompression bombs (excessive compression ratio).
     - Unlimited memory consumption.
     - Pathological decompression size.
 
     Raises:
         DecompressionLimitError: If limits are exceeded.
-        MalformedArchiveError: If the gzip stream is corrupted.
+        MalformedCompressedStreamError: If the gzip stream is corrupted.
     """
     path = validate_trusted_local_path(file_path)
     compressed_size = max(path.stat().st_size, 1)
 
     total_uncompressed = 0
+    max_uncompressed_bytes = limits.max_uncompressed_bytes if limits else None
+    max_compression_ratio = limits.max_compression_ratio if limits else None
 
     try:
         with gzip.open(path, "rb") as gz:
             while chunk := gz.read(chunk_size):
                 total_uncompressed += len(chunk)
-                if total_uncompressed > max_uncompressed_bytes:
+                if (
+                    max_uncompressed_bytes is not None
+                    and total_uncompressed > max_uncompressed_bytes
+                ):
                     raise DecompressionLimitError(
                         f"Uncompressed size exceeded limit of {max_uncompressed_bytes} bytes"
                     )
-                ratio = total_uncompressed / compressed_size
-                if total_uncompressed > 10 * 1024 * 1024 and ratio > max_compression_ratio:
-                    raise DecompressionLimitError(
-                        f"Suspicious compression ratio ({ratio:.1f} > {max_compression_ratio}), potential decompression bomb"
-                    )
+                if max_compression_ratio is not None:
+                    ratio = total_uncompressed / compressed_size
+                    if total_uncompressed > 1024 and ratio > max_compression_ratio:
+                        raise DecompressionLimitError(
+                            f"Suspicious compression ratio ({ratio:.1f} > {max_compression_ratio}), potential decompression bomb"
+                        )
                 yield chunk
     except (gzip.BadGzipFile, OSError) as exc:
         if isinstance(exc, DecompressionLimitError):
             raise
-        raise MalformedArchiveError(f"Failed to decompress gzip stream at {path}: {exc}") from exc
+        raise MalformedCompressedStreamError(
+            f"Failed to decompress gzip stream at {path}: {exc}"
+        ) from exc
 
 
 __all__ = [
     "HDF5_MAGIC",
     "GZIP_MAGIC",
     "MATRIX_MARKET_MAGIC",
-    "DEFAULT_MAX_UNCOMPRESSED_BYTES",
-    "DEFAULT_MAX_COMPRESSION_RATIO",
     "STREAM_CHUNK_SIZE",
     "CompressionFormat",
     "PhysicalContainerFormat",
+    "DecompressionLimits",
     "PhysicalInspectionResult",
     "validate_trusted_local_path",
     "detect_compression",
