@@ -166,21 +166,24 @@ def validate_identifiers(
     identifiers: Sequence[Any],
     *,
     context: str = "identifiers",
+    require_unique: bool = True,
 ) -> list[str]:
     """Validate a sequence of cell or gene identifiers.
 
     Invariants:
     1. Must not be empty.
-    2. Elements must be non-empty strings (or losslessly convertible).
-    3. Identifiers must be unique; duplicates are not silently tolerated.
+    2. Elements must already be non-empty strings without surrounding whitespace.
+    3. Canonical identities must be unique; only explicit descriptive/source values may repeat.
     4. Stable ordering is preserved without auto-deduplication or suffixing.
 
     Args:
         identifiers: Sequence of identifiers.
         context: Description for error reporting (e.g., "cell IDs", "gene IDs").
+        require_unique: False only for descriptive/source values that may repeat;
+            canonical cell and stable feature identities always require uniqueness.
 
     Returns:
-        List of sanitized string identifiers.
+        Original string identifiers, unchanged. Descriptive/source values may explicitly allow duplicates.
 
     Raises:
         CountValidationError: If duplicates exist or identifiers are invalid.
@@ -192,26 +195,35 @@ def validate_identifiers(
         )
 
     seen: set[str] = set()
-    cleaned: list[str] = []
+    validated: list[str] = []
 
     for idx, item in enumerate(identifiers):
-        val_str = str(item).strip() if item is not None else ""
-        if not val_str:
+        if not isinstance(item, str):
+            raise CountValidationError(
+                f"Non-string identifier found in {context} at index {idx}",
+                issue_code=ScientificIssueCode.MALFORMED_INPUT,
+            )
+        if not item or not item.strip():
             raise CountValidationError(
                 f"Empty or whitespace identifier found in {context} at index {idx}",
                 issue_code=ScientificIssueCode.MALFORMED_INPUT,
             )
-        if val_str in seen:
+        if item != item.strip():
             raise CountValidationError(
-                f"Duplicate {context} found: {val_str!r} at index {idx}",
+                f"Surrounding whitespace identifier found in {context} at index {idx}",
+                issue_code=ScientificIssueCode.MALFORMED_INPUT,
+            )
+        if require_unique and item in seen:
+            raise CountValidationError(
+                f"Duplicate {context} found: {item!r} at index {idx}",
                 issue_code=ScientificIssueCode.DUPLICATE_CELL_IDS
                 if "cell" in context.lower()
                 else ScientificIssueCode.MALFORMED_INPUT,
             )
-        seen.add(val_str)
-        cleaned.append(val_str)
+        seen.add(item)
+        validated.append(item)
 
-    return cleaned
+    return validated
 
 
 def detect_ensembl_organism_candidates(identifiers: Sequence[str]) -> Organism | None:
@@ -233,7 +245,7 @@ def detect_ensembl_organism_candidates(identifiers: Sequence[str]) -> Organism |
     other_count = 0
 
     for gid in identifiers:
-        s = str(gid).strip()
+        s = gid if isinstance(gid, str) and gid == gid.strip() else ""
         if not s:
             other_count += 1
         elif _ENS_HUMAN_PATTERN.match(s):
@@ -264,7 +276,7 @@ def check_ensembl_species_conflict(identifiers: Sequence[str]) -> bool:
     has_human = False
     has_mouse = False
     for gid in identifiers:
-        s = str(gid).strip()
+        s = gid if isinstance(gid, str) and gid == gid.strip() else ""
         if _ENS_HUMAN_PATTERN.match(s):
             has_human = True
         elif _ENS_MOUSE_PATTERN.match(s):
@@ -281,7 +293,10 @@ def has_opposing_ensembl_species(identifiers: Sequence[str], organism: Organism)
     For MOUSE: returns True if any Human Ensembl IDs (ENSG...) are found.
     """
     opposing_pattern = _ENS_MOUSE_PATTERN if organism == Organism.HUMAN else _ENS_HUMAN_PATTERN
-    return any(opposing_pattern.match(str(gid).strip()) for gid in identifiers)
+    return any(
+        isinstance(gid, str) and gid == gid.strip() and opposing_pattern.match(gid)
+        for gid in identifiers
+    )
 
 
 def validate_import_source_set_cardinality(source_set: ImportSourceSet) -> list[ScientificIssue]:

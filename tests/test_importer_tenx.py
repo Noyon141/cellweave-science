@@ -52,13 +52,111 @@ from cellweave_science.importers import (
 from cellweave_science.importers.canonical import validate_canonical_anndata
 from cellweave_science.importers.errors import ImporterSecurityError
 from cellweave_science.importers.security import DecompressionLimits
-from cellweave_science.importers.tenx_shared import TenxImporterConfig
+from cellweave_science.importers.tenx_shared import TenxImporterConfig, parse_10x_barcodes
 
 DEFAULT_TEST_LIMITS = DecompressionLimits(
     max_uncompressed_bytes=100 * 1024 * 1024,
     max_compression_ratio=200.0,
 )
 DEFAULT_TEST_CONFIG = TenxImporterConfig(decompression_limits=DEFAULT_TEST_LIMITS)
+
+
+def test_tenx_unicode_identity_survives_gzip_chunk_boundary(tmp_path: Path) -> None:
+    # Split the two-byte UTF-8 character across the 64 KiB decompression boundary.
+    token = "A" * 65535 + "α-1"
+    path = tmp_path / "barcodes.tsv.gz"
+    with gzip.open(path, "wb") as stream:
+        stream.write((token + "\n").encode("utf-8"))
+    limits = DecompressionLimits(max_uncompressed_bytes=100000, max_compression_ratio=10000)
+    assert parse_10x_barcodes(path, limits) == [token]
+
+
+@pytest.mark.parametrize("kind", ["h5", "modern", "legacy"])
+@pytest.mark.parametrize("axis", ["barcode", "feature"])
+@pytest.mark.parametrize("padding", ["leading", "trailing", "both", "tab", "newline"])
+def test_tenx_identity_whitespace_fails_closed(
+    tmp_path: Path, kind: str, axis: str, padding: str
+) -> None:
+    token = "AAACCCAAGT-1" if axis == "barcode" else "ENSG00000141510.7"
+    invalid = {
+        "leading": " " + token,
+        "trailing": token + " ",
+        "both": " " + token + " ",
+        "tab": "\t" + token,
+        "newline": token + "\n",
+    }[padding]
+    barcode = invalid if axis == "barcode" else "AAACCCAAGT-1"
+    feature = invalid if axis == "feature" else "ENSG00000141510.7"
+    importer: TenxH5Importer | TenxMtxImporter
+    if kind == "h5":
+        path = create_synthetic_10x_h5(
+            tmp_path / "source.h5",
+            [(feature, "TP53", "Gene Expression")],
+            [barcode],
+            np.array([1]),
+            np.array([0]),
+            np.array([0, 1]),
+        )
+        bundle = ImportSourceSet(
+            SourceFormat.TENX_H5, (ImportSourceFile("primary", ImportFileRole.PRIMARY, path),)
+        )
+        importer = TenxH5Importer()
+    else:
+        features: list[tuple[str, str, str]] | list[tuple[str, str]]
+        if kind == "legacy":
+            features = [(feature, "TP53")]
+        else:
+            features = [(feature, "TP53", "Gene Expression")]
+        matrix, feature_path, barcode_path = create_synthetic_10x_mtx(
+            tmp_path / "triplet",
+            features,
+            [barcode],
+            [(1, 1, 1)],
+            legacy_genes=kind == "legacy",
+            gzip_features=True,
+            gzip_barcodes=True,
+        )
+        bundle = ImportSourceSet(
+            SourceFormat.TENX_MTX,
+            (
+                ImportSourceFile("m", ImportFileRole.MATRIX, matrix),
+                ImportSourceFile("f", ImportFileRole.FEATURES, feature_path),
+                ImportSourceFile("b", ImportFileRole.BARCODES, barcode_path),
+            ),
+        )
+        importer = TenxMtxImporter(DEFAULT_TEST_CONFIG)
+    checksums = [compute_file_sha256(file.local_path) for file in bundle.files]
+    output = tmp_path / "out.h5ad"
+    with pytest.raises(ImporterSecurityError):
+        importer.canonicalize(bundle, str(output), Organism.HUMAN, GeneIdScheme.ENSEMBL)
+    assert not output.exists()
+    assert [compute_file_sha256(file.local_path) for file in bundle.files] == checksums
+
+
+@pytest.mark.parametrize("field", ["barcodes", "features/id"])
+@pytest.mark.parametrize("value", [1, 1.0, True])
+def test_tenx_h5_numeric_identity_is_not_stringified(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    path = create_synthetic_10x_h5(
+        tmp_path / "source.h5",
+        [("ENSG00000141510.7", "TP53", "Gene Expression")],
+        ["AAACCCAAGT-1"],
+        np.array([1]),
+        np.array([0]),
+        np.array([0, 1]),
+    )
+    with h5py.File(path, "r+") as handle:
+        del handle[f"matrix/{field}"]
+        handle.create_dataset(f"matrix/{field}", data=np.array([value]))
+    bundle = ImportSourceSet(
+        SourceFormat.TENX_H5, (ImportSourceFile("p", ImportFileRole.PRIMARY, path),)
+    )
+    with pytest.raises(ImporterSecurityError):
+        TenxH5Importer().canonicalize(
+            bundle, str(tmp_path / "out.h5ad"), Organism.HUMAN, GeneIdScheme.ENSEMBL
+        )
+
 
 # =========================================================================
 # FIXTURE BUILDER HELPERS

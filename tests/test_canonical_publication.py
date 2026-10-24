@@ -59,7 +59,7 @@ def _create_valid_canonical_h5ad(path: Path, *, seed_offset: int = 0) -> Path:
         )
     )
     obs = pd.DataFrame(
-        {"sample_id": ["S1", "S1"]},
+        {"sample_key": ["S1", "S1"]},
         index=pd.Index(["cell_1", "cell_2"], name="cell_id"),
     )
     var = pd.DataFrame(
@@ -76,6 +76,36 @@ def _create_valid_canonical_h5ad(path: Path, *, seed_offset: int = 0) -> Path:
     )
     adata.write_h5ad(path)
     return path
+
+
+@pytest.mark.parametrize(
+    "slot,key",
+    [
+        ("uns", "storage_key"),
+        ("uns", "organization_id"),
+        ("uns", "source_checksum"),
+        ("obs", "source_row_number"),
+        ("obs", "qc_total_counts"),
+        ("obs", "leiden"),
+        ("var", "highly_variable"),
+        ("var", "featureAxisIndexColumn"),
+        ("var", "mean"),
+    ],
+)
+def test_publication_rejects_prohibited_metadata_before_network(
+    tmp_path: Path, slot: str, key: str
+) -> None:
+    path = _create_valid_canonical_h5ad(tmp_path / "canonical.h5ad")
+    source = ad.read_h5ad(path)
+    getattr(source, slot)[key] = "prohibited"
+    source.write_h5ad(path)
+    checksum = compute_file_sha256(path)
+    transport = InMemoryCapabilityStorageTransport()
+    with pytest.raises(CanonicalValidationError, match=f"unauthorized {slot}"):
+        publish_canonical_artifact(path, _make_capabilities(), transport=transport)
+    assert transport.put_calls == 0
+    assert transport.get_calls == 0
+    assert compute_file_sha256(path) == checksum
 
 
 def _make_capabilities(

@@ -13,10 +13,38 @@ from cellweave_science.importers.validation import (
 
 
 def test_unique_cell_identifiers() -> None:
-    """Valid unique cell IDs pass with whitespace trimmed."""
-    raw_cells = ["cell_1", "cell_2 ", "cell_3"]
+    """Valid unique cell IDs pass exactly unchanged."""
+    raw_cells = ["cell_1", "cell_2", "cell_3"]
     cleaned = validate_identifiers(raw_cells, context="cell IDs")
     assert cleaned == ["cell_1", "cell_2", "cell_3"]
+
+
+def test_exact_identifiers_preserved() -> None:
+    ids = ["CELL_A-1", "AAACCCAAGT-1", "ENSG00000141510.7", "ENSMUSG00000059552.12", "cell_α.1"]
+    assert validate_identifiers(ids) == ids
+
+
+@pytest.mark.parametrize("context", ["cell IDs", "feature IDs"])
+@pytest.mark.parametrize(
+    "value", [" cell-A", "cell-A ", " cell-A ", "\tcell-A", "cell-A\n", "", " ", "\t", "\n"]
+)
+def test_whitespace_identifiers_rejected_exactly(context: str, value: str) -> None:
+    ids = [value]
+    with pytest.raises(CountValidationError):
+        validate_identifiers(ids, context=context)
+    assert ids == [value]
+
+
+@pytest.mark.parametrize("context", ["cell IDs", "feature IDs"])
+@pytest.mark.parametrize("value", [1, 1.0, True, None, pytest.param(object(), id="object")])
+def test_nonstring_identifiers_rejected(context: str, value: object) -> None:
+    with pytest.raises(CountValidationError, match="Non-string identifier"):
+        validate_identifiers([value], context=context)
+
+
+def test_whitespace_fails_before_normalized_duplicate_detection() -> None:
+    with pytest.raises(CountValidationError, match="Surrounding whitespace"):
+        validate_identifiers(["cell-A", "cell-A "], context="cell IDs")
 
 
 def test_duplicate_cell_identifiers_rejected() -> None:

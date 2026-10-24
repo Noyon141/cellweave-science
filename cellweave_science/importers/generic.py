@@ -34,6 +34,7 @@ Invariants:
 
 from __future__ import annotations
 
+import csv
 import io
 import os
 import re
@@ -209,7 +210,7 @@ def _read_raw_header_tokens(file_path: Path, delim: str, limits: DecompressionLi
         line = raw_line.strip("\r\n")
         if not line.strip() or line.lstrip().startswith("#") or line.lstrip().startswith("%"):
             continue
-        return [tok.strip() for tok in line.split(delim)]
+        return next(csv.reader([line], delimiter=delim))
     return []
 
 
@@ -745,14 +746,14 @@ class GenericMatrixImporter:
                     expected_delim=delim,
                 )
                 # Candidate header tokens (excluding first column if non-numeric, or all columns)
-                cand_id_sources.append([str(c).strip() for c in table_df_cand.columns[1:]])
-                cand_id_sources.append([str(x).strip() for x in table_df_cand.iloc[:, 0].tolist()])
+                cand_id_sources.append(table_df_cand.columns[1:].tolist())
+                cand_id_sources.append(table_df_cand.iloc[:, 0].tolist())
             except Exception:  # noqa: BLE001
                 pass
 
         if feat_df_cand is not None and len(feat_df_cand.columns) > 0:
             for col in feat_df_cand.columns:
-                cand_id_sources.append([str(x).strip() for x in feat_df_cand[col].tolist()])
+                cand_id_sources.append(feat_df_cand[col].tolist())
 
         for cand_ids in cand_id_sources:
             if not cand_ids:
@@ -1156,11 +1157,11 @@ class GenericMatrixImporter:
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
                 _ = validate_identifiers(
-                    realigned_cell_meta[mapping.cellMetadataJoinColumn].astype(str).tolist(),
+                    realigned_cell_meta[mapping.cellMetadataJoinColumn].tolist(),
                     context="MTX source cell tokens (cellMetadataJoinColumn)",
                 )
 
-            raw_cell_ids = realigned_cell_meta[mapping.cellIdColumn].astype(str).tolist()
+            raw_cell_ids = realigned_cell_meta[mapping.cellIdColumn].tolist()
             canonical_cell_ids = validate_identifiers(raw_cell_ids, context="cell IDs")
 
             # Section 13 & 14: MTX Feature Identity & optional featureMetadataJoinColumn
@@ -1169,7 +1170,7 @@ class GenericMatrixImporter:
                     f"Requested geneIdColumn '{mapping.geneIdColumn}' not found in FEATURE_METADATA",
                     issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                 )
-            raw_gene_ids = realigned_feat_meta[mapping.geneIdColumn].astype(str).tolist()
+            raw_gene_ids = realigned_feat_meta[mapping.geneIdColumn].tolist()
             canonical_gene_ids = validate_identifiers(raw_gene_ids, context="gene IDs")
             if len(canonical_gene_ids) != len(set(canonical_gene_ids)):
                 raise CountValidationError(
@@ -1183,9 +1184,9 @@ class GenericMatrixImporter:
                         f"Requested featureMetadataJoinColumn '{mapping.featureMetadataJoinColumn}' not found in FEATURE_METADATA",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
-                raw_source_feat_ids = (
-                    realigned_feat_meta[mapping.featureMetadataJoinColumn].astype(str).tolist()
-                )
+                raw_source_feat_ids = realigned_feat_meta[
+                    mapping.featureMetadataJoinColumn
+                ].tolist()
                 source_feature_ids = validate_identifiers(
                     raw_source_feat_ids, context="source feature IDs"
                 )
@@ -1215,21 +1216,21 @@ class GenericMatrixImporter:
                         "CSV/TSV CELLS_BY_GENES canonicalization requires explicit mapping.matrixCellIdColumn",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
-                matrix_cell_col = mapping.matrixCellIdColumn.strip()
+                matrix_cell_col = mapping.matrixCellIdColumn
                 if matrix_cell_col not in table_df.columns:
                     raise ImporterSecurityError(
                         f"Requested matrixCellIdColumn '{matrix_cell_col}' not found in MATRIX columns",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
 
-                raw_source_cell_ids = table_df[matrix_cell_col].astype(str).tolist()
+                raw_source_cell_ids = table_df[matrix_cell_col].tolist()
                 expr_df = table_df.drop(columns=[matrix_cell_col])
                 if expr_df.empty or len(expr_df.columns) == 0:
                     raise CountValidationError(
                         f"No expression columns remain in {matrix_path.name} after excluding matrixCellIdColumn '{matrix_cell_col}'",
                         issue_code=ScientificIssueCode.MALFORMED_INPUT,
                     )
-                raw_source_feature_ids = [str(c).strip() for c in expr_df.columns]
+                raw_source_feature_ids = expr_df.columns.tolist()
 
                 try:
                     expr_mat = expr_df.to_numpy(dtype=np.float64)
@@ -1251,21 +1252,21 @@ class GenericMatrixImporter:
                         "CSV/TSV GENES_BY_CELLS canonicalization requires explicit mapping.matrixFeatureIdColumn",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
-                matrix_feat_col = mapping.matrixFeatureIdColumn.strip()
+                matrix_feat_col = mapping.matrixFeatureIdColumn
                 if matrix_feat_col not in table_df.columns:
                     raise ImporterSecurityError(
                         f"Requested matrixFeatureIdColumn '{matrix_feat_col}' not found in MATRIX columns",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
 
-                raw_source_feature_ids = table_df[matrix_feat_col].astype(str).tolist()
+                raw_source_feature_ids = table_df[matrix_feat_col].tolist()
                 expr_df = table_df.drop(columns=[matrix_feat_col])
                 if expr_df.empty or len(expr_df.columns) == 0:
                     raise CountValidationError(
                         f"No expression columns remain in {matrix_path.name} after excluding matrixFeatureIdColumn '{matrix_feat_col}'",
                         issue_code=ScientificIssueCode.MALFORMED_INPUT,
                     )
-                raw_source_cell_ids = [str(c).strip() for c in expr_df.columns]
+                raw_source_cell_ids = expr_df.columns.tolist()
 
                 try:
                     expr_mat = expr_df.to_numpy(dtype=np.float64)
@@ -1302,14 +1303,21 @@ class GenericMatrixImporter:
                         "CELL_METADATA requires explicit mapping.cellMetadataJoinColumn to join against matrix cell tokens",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
-                cell_join_col = mapping.cellMetadataJoinColumn.strip()
+                cell_join_col = mapping.cellMetadataJoinColumn
                 if cell_join_col not in cell_df.columns:
                     raise ImporterSecurityError(
                         f"Requested cellMetadataJoinColumn '{cell_join_col}' not found in CELL_METADATA",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
 
-                join_vals = cell_df[cell_join_col].astype(str).str.strip()
+                join_vals = pd.Series(
+                    validate_identifiers(
+                        cell_df[cell_join_col].tolist(),
+                        context="cell metadata join IDs",
+                        require_unique=False,
+                    ),
+                    index=cell_df.index,
+                )
                 if join_vals.eq("").any():
                     raise CountValidationError(
                         f"Blank cell join identifier in CELL_METADATA column '{cell_join_col}'",
@@ -1342,9 +1350,7 @@ class GenericMatrixImporter:
                             f"Requested cellIdColumn '{mapping.cellIdColumn}' not found in CELL_METADATA",
                             issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                         )
-                    translated_cell_ids = (
-                        realigned_cell_meta[mapping.cellIdColumn].astype(str).tolist()
-                    )
+                    translated_cell_ids = realigned_cell_meta[mapping.cellIdColumn].tolist()
                     canonical_cell_ids = validate_identifiers(
                         translated_cell_ids, context="canonical cell IDs"
                     )
@@ -1371,14 +1377,21 @@ class GenericMatrixImporter:
                         "FEATURE_METADATA requires explicit mapping.featureMetadataJoinColumn to join against matrix feature tokens",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
-                feat_join_col = mapping.featureMetadataJoinColumn.strip()
+                feat_join_col = mapping.featureMetadataJoinColumn
                 if feat_join_col not in feat_df.columns:
                     raise ImporterSecurityError(
                         f"Requested featureMetadataJoinColumn '{feat_join_col}' not found in FEATURE_METADATA",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
 
-                feat_join_vals = feat_df[feat_join_col].astype(str).str.strip()
+                feat_join_vals = pd.Series(
+                    validate_identifiers(
+                        feat_df[feat_join_col].tolist(),
+                        context="feature metadata join IDs",
+                        require_unique=False,
+                    ),
+                    index=feat_df.index,
+                )
                 if feat_join_vals.eq("").any():
                     raise CountValidationError(
                         f"Blank feature join identifier in FEATURE_METADATA column '{feat_join_col}'",
@@ -1410,7 +1423,7 @@ class GenericMatrixImporter:
                             f"Requested geneIdColumn '{mapping.geneIdColumn}' not found in FEATURE_METADATA",
                             issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                         )
-                    stable_ids = realigned_feat_meta[mapping.geneIdColumn].astype(str).tolist()
+                    stable_ids = realigned_feat_meta[mapping.geneIdColumn].tolist()
                     canonical_gene_ids = validate_identifiers(
                         stable_ids, context="FEATURE_METADATA stable gene IDs"
                     )
@@ -1458,8 +1471,10 @@ class GenericMatrixImporter:
                     f"Requested geneSymbolColumn '{mapping.geneSymbolColumn}' not found in FEATURE_METADATA",
                     issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                 )
-            symbol_vals = (
-                realigned_feat_meta[mapping.geneSymbolColumn].astype(str).str.strip().tolist()
+            symbol_vals = validate_identifiers(
+                realigned_feat_meta[mapping.geneSymbolColumn].tolist(),
+                context="gene symbols",
+                require_unique=False,
             )
             if any(not s for s in symbol_vals):
                 raise CountValidationError(
@@ -1511,7 +1526,11 @@ class GenericMatrixImporter:
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
                 map_dict = {m.sourceValue: m.sampleKey for m in mapping.sampleMappings}
-                source_sample_vals = realigned_cell_meta[mapping.sampleColumn].astype(str).tolist()
+                source_sample_vals = validate_identifiers(
+                    realigned_cell_meta[mapping.sampleColumn].tolist(),
+                    context="sample source values",
+                    require_unique=False,
+                )
                 mapped_sample_keys: list[str] = []
                 for val in source_sample_vals:
                     target_key = map_dict.get(val)
@@ -1521,7 +1540,9 @@ class GenericMatrixImporter:
                             "has no approved SampleMappingEntry",
                             issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                         )
-                    mapped_sample_keys.append(target_key.strip())
+                    mapped_sample_keys.append(
+                        validate_identifiers([target_key], context="registered sample keys")[0]
+                    )
                 canonical_obs["sample_key"] = mapped_sample_keys
             elif mapping.sampleMappings:
                 raise ImporterSecurityError(

@@ -232,7 +232,17 @@ class H5ADImporter:
             ]
 
         # 7. Feature identity check
-        feature_resolution = self._resolve_feature_identity(adata)
+        try:
+            feature_resolution = self._resolve_feature_identity(adata)
+        except CountValidationError as exc:
+            return [
+                ScientificIssue(
+                    code=exc.issue_code,
+                    severity=ScientificIssueSeverity.ERROR,
+                    message=str(exc),
+                    userActionRequired=True,
+                )
+            ]
         if feature_resolution["issue"] is not None:
             return [feature_resolution["issue"]]
 
@@ -541,8 +551,10 @@ class H5ADImporter:
             return None
 
         # 2. Check feature identity alignment
-        raw_var_names = list(raw.var_names)
-        cur_var_names = list(adata.var_names)
+        raw_var_names = validate_identifiers(raw.var_names.tolist(), context="raw feature IDs")
+        cur_var_names = validate_identifiers(
+            adata.var_names.tolist(), context="current feature IDs", require_unique=False
+        )
 
         raw_mat = raw.X
         raw_classification = classify_count_matrix(raw_mat)
@@ -588,17 +600,22 @@ class H5ADImporter:
 
     def _resolve_feature_identity(self, adata: ad.AnnData) -> dict[str, Any]:
         """Determine stable canonical var_names, gene symbols, and scheme."""
-        source_var_names = [str(x).strip() for x in adata.var_names]
+        source_var_names = validate_identifiers(
+            adata.var_names.tolist(), context="source feature IDs", require_unique=False
+        )
 
         # 1. Check if source var_names are already consistent Ensembl IDs
         ens_candidate = detect_ensembl_organism_candidates(source_var_names)
         if ens_candidate is not None:
+            validate_identifiers(source_var_names, context="stable feature IDs")
             # var_names are stable Ensembl IDs!
             # Check for descriptive symbol column
             gene_symbols: list[str] | None = None
             for col in _CANDIDATE_GENE_SYMBOL_COLUMNS:
                 if col in adata.var.columns:
-                    gene_symbols = [str(s).strip() for s in adata.var[col]]
+                    gene_symbols = validate_identifiers(
+                        adata.var[col].tolist(), context="gene symbols", require_unique=False
+                    )
                     break
 
             return {
@@ -611,11 +628,8 @@ class H5ADImporter:
         # 2. Check if an explicit stable ID column exists in var
         for col in _CANDIDATE_STABLE_ID_COLUMNS:
             if col in adata.var.columns:
-                candidate_ids = [str(x).strip() for x in adata.var[col]]
-                try:
-                    clean_ids = validate_identifiers(candidate_ids, context=f"var['{col}']")
-                except CountValidationError:
-                    continue
+                candidate_ids = adata.var[col].tolist()
+                clean_ids = validate_identifiers(candidate_ids, context=f"var['{col}']")
 
                 if detect_ensembl_organism_candidates(clean_ids) is not None:
                     # Found stable Ensembl ID column!
@@ -758,7 +772,11 @@ class H5ADImporter:
                     f"Requested sampleColumn '{mapping.sampleColumn}' not found in source cell metadata",
                     issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                 )
-            source_vals = source_obs[mapping.sampleColumn].astype(str).tolist()
+            source_vals = validate_identifiers(
+                source_obs[mapping.sampleColumn].tolist(),
+                context="sample source values",
+                require_unique=False,
+            )
             if not mapping.sampleMappings:
                 raise ImporterSecurityError(
                     f"sampleColumn '{mapping.sampleColumn}' provided without approved sampleMappings; "
@@ -775,7 +793,9 @@ class H5ADImporter:
                         "has no approved SampleMappingEntry",
                         issue_code=ScientificIssueCode.MISSING_REQUIRED_METADATA,
                     )
-                mapped_keys.append(target_key.strip())
+                mapped_keys.append(
+                    validate_identifiers([target_key], context="registered sample keys")[0]
+                )
             canonical_obs["sample_key"] = mapped_keys
         elif mapping.sampleMappings:
             raise ImporterSecurityError(

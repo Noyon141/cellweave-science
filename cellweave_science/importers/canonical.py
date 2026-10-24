@@ -162,6 +162,33 @@ def validate_canonical_anndata(
     validate_identifiers(adata.obs_names.tolist(), context="canonical obs_names")
     validate_identifiers(adata.var_names.tolist(), context="canonical var_names")
 
+    # Validate only: never drop or rewrite metadata at the publication boundary.
+    allowed_uns = {"organism", "gene_id_scheme", "reference_build"}
+    allowed_obs = {
+        "sample_key",
+        "condition",
+        "batch",
+        "biological_replicate",
+        "technical_replicate",
+    }
+    allowed_var = {"source_feature_id", "gene_symbol"}
+    for label, keys, allowed in (
+        ("uns", adata.uns.keys(), allowed_uns),
+        ("obs", adata.obs.columns, allowed_obs),
+        ("var", adata.var.columns, allowed_var),
+    ):
+        if any(key not in allowed for key in keys):
+            raise CanonicalValidationError(
+                f"Canonical AnnData contains unauthorized {label} metadata"
+            )
+    # Existing format-neutral callers may omit source_feature_id; importer outputs preserve it.
+    if "source_feature_id" in adata.var:
+        validate_identifiers(
+            adata.var["source_feature_id"].tolist(),
+            context="canonical source_feature_id",
+            require_unique=False,
+        )
+
     # Policy B hygiene checks: no layers, obsm, varm, obsp, varp, or raw
     if "counts" in adata.layers:
         raise CanonicalValidationError(

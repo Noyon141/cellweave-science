@@ -3,6 +3,49 @@
 ## Overview
 This document specifies the shared scientific, cryptographic, and security primitives used by all CellWeave Phase 3 dataset importers. Concrete importers (H5AD, 10x H5, 10x MTX, Generic Matrix) are built on top of these base abstractions in Steps E, F, and G.
 
+## Phase 3 exit correction: exact identity and metadata policy
+
+`validate_identifiers()` accepts only existing, nonempty strings without surrounding
+whitespace. It rejects nonstrings and whitespace rather than stringifying or
+trimming them. Accepted values retain their exact case, Unicode, punctuation,
+Ensembl version, and barcode suffix. Duplicate canonical cell/stable feature IDs
+remain invalid. Only descriptive/source values explicitly permitted to repeat
+(for example gene symbols) use `require_unique=False`.
+
+All importer authority paths apply this policy before assigning canonical axes or
+`source_feature_id`. HDF5 byte strings are decoded as strict UTF-8, not converted
+from numeric values. Gzip text uses incremental UTF-8 decoding so multibyte
+identifiers survive chunk boundaries. Generic text readers preserve physical
+string tokens; numeric MTX axis coordinate parsing remains a separate exception.
+Explicit metadata joins use exact source tokens without normalization.
+
+Sample source values and mapping `sourceValue` match exactly. Registered
+`sampleKey` is validated and retained, never trimmed or invented. A source value
+with whitespace cannot silently match a trimmed mapping value. Scientific engine
+validation does not replace Postgres as registered sample authority.
+
+`validate_canonical_anndata()` independently rejects extra metadata and never
+mutates or sanitizes the object:
+
+- `uns`: only `organism`, `gene_id_scheme`, and optional `reference_build`.
+- `obs`: only optional `sample_key`, `condition`, `batch`,
+  `biological_replicate`, and `technical_replicate` columns.
+- `var`: only `source_feature_id` and optional `gene_symbol` columns.
+
+Existing format-neutral canonical builder callers may omit `source_feature_id`;
+importer outputs retain it. When present, its values must satisfy exact string
+validation. Existing raw-count/CSR, unique-axis, empty analysis slot, and absent
+`raw` checks remain in force. Publication invokes this validator before any
+PUT/GET, so prohibited local metadata cannot reach publication transport.
+
+### PHASE 3 REFERENCE-DATA QUALIFICATION GAP
+
+The seven external/reference entries in `reference_data/golden_manifest.json`
+still have placeholder-style hashes and are not executed by the manifest harness.
+This correction does not change those entries, download datasets, or qualify them.
+Passing importer goldens refers to the existing synthetic importer fixtures only.
+The subsequent Phase 3 exit audit must retain this qualification gap.
+
 ---
 
 ## 1. Cryptographic Checksum Algorithm

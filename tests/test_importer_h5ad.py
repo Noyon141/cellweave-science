@@ -51,12 +51,128 @@ from cellweave_science.importers.h5ad import H5ADImporter
 from cellweave_science.importers.sources import ImportSourceFile, ImportSourceSet
 
 
+@pytest.mark.parametrize("axis", ["obs", "var"])
+@pytest.mark.parametrize("token", [" cell-A", "cell-A ", " cell-A ", "\tcell-A", "cell-A\n", " "])
+def test_h5ad_whitespace_identity_rejected_source_unchanged(
+    tmp_path: Path, axis: str, token: str
+) -> None:
+    path = tmp_path / "identity.h5ad"
+    source = ad.AnnData(
+        X=sp.csr_matrix([[1]]),
+        obs=pd.DataFrame(index=[token if axis == "obs" else "CELL_A-1"]),
+        var=pd.DataFrame(index=[token if axis == "var" else "ENSG00000141510.7"]),
+    )
+    source.write_h5ad(path)
+    checksum = compute_file_sha256(path)
+    bundle = ImportSourceSet(
+        SourceFormat.H5AD, (ImportSourceFile("file", ImportFileRole.PRIMARY, path),)
+    )
+    output = tmp_path / "canonical.h5ad"
+    assert H5ADImporter().validate(bundle)
+    with pytest.raises(ImporterSecurityError):
+        H5ADImporter().canonicalize(bundle, str(output), Organism.HUMAN, GeneIdScheme.ENSEMBL)
+    assert not output.exists()
+    assert compute_file_sha256(path) == checksum
+    assert getattr(ad.read_h5ad(path), axis).index.tolist() == [token]
+
+
+@pytest.mark.parametrize("value", [1, 1.0, True, None, " ENSG00000141510.7 "])
+def test_h5ad_stable_id_column_is_not_coerced_or_trimmed(tmp_path: Path, value: object) -> None:
+    # Numeric columns are representable; missing None must be stored as NaN in H5AD.
+    # AnnData itself coerces numeric axis indices before they reach this importer.
+    source = ad.AnnData(
+        X=sp.csr_matrix([[1]]),
+        obs=pd.DataFrame(index=["c1"]),
+        var=pd.DataFrame({"gene_ids": [np.nan if value is None else value]}, index=["TP53"]),
+    )
+    path = tmp_path / "source.h5ad"
+    source.write_h5ad(path)
+    bundle = ImportSourceSet(
+        SourceFormat.H5AD, (ImportSourceFile("file", ImportFileRole.PRIMARY, path),)
+    )
+    with pytest.raises(ImporterSecurityError):
+        H5ADImporter().canonicalize(
+            bundle, str(tmp_path / "out.h5ad"), Organism.HUMAN, GeneIdScheme.ENSEMBL
+        )
+
+
+@pytest.mark.parametrize("raw_id", [" ENSG00000141510.7", "ENSG00000141510.7 "])
+def test_h5ad_raw_alignment_rejects_whitespace(tmp_path: Path, raw_id: str) -> None:
+    source = ad.AnnData(
+        X=np.array([[1.5]]),
+        obs=pd.DataFrame(index=["c1"]),
+        var=pd.DataFrame(index=["ENSG00000141510.7"]),
+    )
+    source.raw = ad.AnnData(
+        X=sp.csr_matrix([[1]]), obs=source.obs.copy(), var=pd.DataFrame(index=[raw_id])
+    )
+    path = tmp_path / "source.h5ad"
+    source.write_h5ad(path)
+    bundle = ImportSourceSet(
+        SourceFormat.H5AD, (ImportSourceFile("file", ImportFileRole.PRIMARY, path),)
+    )
+    with pytest.raises(ImporterSecurityError):
+        H5ADImporter().canonicalize(
+            bundle, str(tmp_path / "out.h5ad"), Organism.HUMAN, GeneIdScheme.ENSEMBL
+        )
+
+
 def test_h5ad_importer_protocol_conformance() -> None:
     """H5ADImporter conforms to DatasetImporter runtime checkable protocol."""
     importer = H5ADImporter()
     from cellweave_science.importers import DatasetImporter
 
     assert isinstance(importer, DatasetImporter)
+
+
+@pytest.mark.parametrize(
+    "source_value,mapping_value,target_key",
+    [
+        ("donor ", "donor", "SMP-key.7"),
+        ("donor", "donor ", "SMP-key.7"),
+        ("donor", "donor", " SMP-key.7 "),
+        ("Donor_α", "Donor_α", "SMP-key.7"),
+    ],
+)
+def test_h5ad_sample_mapping_exactness(
+    tmp_path: Path, source_value: str, mapping_value: str, target_key: str
+) -> None:
+    path, output = tmp_path / "source.h5ad", tmp_path / "out.h5ad"
+    source = ad.AnnData(
+        X=sp.csr_matrix([[1]]),
+        obs=pd.DataFrame({"sample": [source_value]}, index=["AAACCCAAGT-1"]),
+        var=pd.DataFrame(index=["ENSG00000141510.7"]),
+    )
+    source.write_h5ad(path)
+    checksum = compute_file_sha256(path)
+    bundle = ImportSourceSet(
+        SourceFormat.H5AD, (ImportSourceFile("p", ImportFileRole.PRIMARY, path),)
+    )
+    mapping = MetadataMappingSubmission(
+        datasetVersionId="dsv",
+        organism=Organism.HUMAN,
+        geneIdScheme=GeneIdScheme.ENSEMBL,
+        sampleColumn="sample",
+        sampleMappings=[SampleMappingEntry(sourceValue=mapping_value, sampleKey=target_key)],
+    )
+    if source_value == "Donor_α":
+        H5ADImporter().canonicalize(
+            bundle, str(output), Organism.HUMAN, GeneIdScheme.ENSEMBL, mapping=mapping
+        )
+        result = ad.read_h5ad(output)
+        assert result.obs_names.tolist() == ["AAACCCAAGT-1"]
+        assert result.var_names.tolist() == ["ENSG00000141510.7"]
+        assert result.var["source_feature_id"].tolist() == ["ENSG00000141510.7"]
+        assert result.obs["sample_key"].tolist() == [target_key]
+    else:
+        from cellweave_science.importers.errors import CountValidationError
+
+        with pytest.raises((CountValidationError, ImporterSecurityError)):
+            H5ADImporter().canonicalize(
+                bundle, str(output), Organism.HUMAN, GeneIdScheme.ENSEMBL, mapping=mapping
+            )
+        assert not output.exists()
+    assert compute_file_sha256(path) == checksum
 
 
 def test_detect_valid_h5ad(tmp_path: Path) -> None:

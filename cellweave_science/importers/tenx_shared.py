@@ -11,6 +11,7 @@ Supports:
 
 from __future__ import annotations
 
+import codecs
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,24 @@ from cellweave_science.importers.security import (
     open_bounded_gzip_stream,
     validate_trusted_local_path,
 )
+from cellweave_science.importers.validation import validate_identifiers
+
+
+def decode_hdf5_string(value: object) -> str:
+    """Decode the HDF5 byte-string representation without normalizing biological tokens."""
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CountValidationError(
+                "Invalid UTF-8 identifier", issue_code=ScientificIssueCode.MALFORMED_INPUT
+            ) from exc
+    if isinstance(value, str):
+        return value
+    raise CountValidationError(
+        "Non-string HDF5 identifier", issue_code=ScientificIssueCode.MALFORMED_INPUT
+    )
+
 
 GENE_EXPRESSION_MODALITY = "Gene Expression"
 
@@ -66,26 +85,33 @@ def stream_text_lines(
     file_path: Path | str,
     limits: DecompressionLimits,
 ) -> Generator[str, None, None]:
-    """Yield stripped text lines from plain text or bounded gzip file.
+    """Yield exact UTF-8 text tokens, removing only physical line terminators.
 
     Guards against decompression bombs using Step D open_bounded_gzip_stream.
     """
     path = validate_trusted_local_path(file_path)
     inspection = inspect_physical_file(path)
 
-    if inspection.compression == CompressionFormat.GZIP:
-        buffer = ""
-        for chunk in open_bounded_gzip_stream(path, limits=limits):
-            buffer += chunk.decode("utf-8", errors="replace")
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                yield line.rstrip("\r")
-        if buffer:
-            yield buffer.rstrip("\r")
-    else:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                yield line.rstrip("\r\n")
+    try:
+        if inspection.compression == CompressionFormat.GZIP:
+            buffer = ""
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            for chunk in open_bounded_gzip_stream(path, limits=limits):
+                buffer += decoder.decode(chunk)
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    yield line.removesuffix("\r")
+            buffer += decoder.decode(b"", final=True)
+            if buffer:
+                yield buffer.removesuffix("\r")
+        else:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    yield line.removesuffix("\n").removesuffix("\r")
+    except UnicodeError as exc:
+        raise CountValidationError(
+            "Source text contains invalid UTF-8", issue_code=ScientificIssueCode.MALFORMED_INPUT
+        ) from exc
 
 
 def parse_10x_barcodes(
@@ -107,12 +133,13 @@ def parse_10x_barcodes(
     seen: set[str] = set()
 
     for line_idx, raw_line in enumerate(stream_text_lines(file_path, limits=limits), start=1):
-        line = raw_line.strip()
+        line = raw_line
         if not line:
             raise CountValidationError(
                 f"Empty or blank barcode encountered at line {line_idx}",
                 issue_code=ScientificIssueCode.MALFORMED_INPUT,
             )
+        validate_identifiers([line], context="cell barcode")
         if line in seen:
             raise CountValidationError(
                 f"Duplicate barcode detected: '{line}' at line {line_idx}",
@@ -160,13 +187,17 @@ def parse_10x_features_tsv(
                 issue_code=ScientificIssueCode.MALFORMED_INPUT,
             )
 
-        feature_id = parts[0].strip()
-        gene_symbol = parts[1].strip()
+        feature_id = parts[0]
+        gene_symbol = parts[1]
         if not feature_id:
             raise CountValidationError(
                 f"Empty stable feature identifier at line {line_idx}",
                 issue_code=ScientificIssueCode.MALFORMED_INPUT,
             )
+
+        validate_identifiers([feature_id], context="feature ID")
+        if gene_symbol:
+            validate_identifiers([gene_symbol], context="gene symbol")
 
         feature_type = parts[2].strip() if len(parts) >= 3 else GENE_EXPRESSION_MODALITY
 

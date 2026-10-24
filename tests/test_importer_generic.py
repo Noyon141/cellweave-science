@@ -199,6 +199,126 @@ def make_mapping(
 # =========================================================================
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "matrix_cell",
+        "matrix_feature",
+        "cell_join",
+        "feature_join",
+        "cell_id",
+        "gene_id",
+        "gene_symbol",
+    ],
+)
+@pytest.mark.parametrize("padding", ["leading", "trailing", "tab", "newline"])
+def test_generic_identity_and_join_exactness(tmp_path: Path, field: str, padding: str) -> None:
+    tokens = {
+        "matrix_cell": "source_cell",
+        "matrix_feature": "probe.7",
+        "cell_join": "source_cell",
+        "feature_join": "probe.7",
+        "cell_id": "CELL_A-1",
+        "gene_id": "ENSG00000141510.7",
+        "gene_symbol": "TP53",
+    }
+    original = tokens[field]
+    tokens[field] = {
+        "leading": " " + original,
+        "trailing": original + " ",
+        "tab": "\t" + original,
+        "newline": original + "\n",
+    }[padding]
+    matrix, cells, features = (
+        tmp_path / "matrix.csv",
+        tmp_path / "cells.csv",
+        tmp_path / "features.csv",
+    )
+    create_csv_matrix(matrix, [[tokens["matrix_cell"], 1]], ["cell", tokens["matrix_feature"]])
+    create_csv_matrix(cells, [[tokens["cell_join"], tokens["cell_id"]]], ["join", "id"])
+    create_csv_matrix(
+        features,
+        [[tokens["feature_join"], tokens["gene_id"], tokens["gene_symbol"]]],
+        ["join", "id", "symbol"],
+    )
+    bundle = create_source_set(
+        [
+            create_source_file(matrix, ImportFileRole.MATRIX),
+            create_source_file(cells, ImportFileRole.CELL_METADATA),
+            create_source_file(features, ImportFileRole.FEATURE_METADATA),
+        ]
+    )
+    mapping = make_mapping(
+        matrix_cell_id_column="cell",
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        cell_metadata_join_column="join",
+        cell_id_column="id",
+        feature_metadata_join_column="join",
+        gene_id_column="id",
+        gene_symbol_column="symbol",
+    )
+    output = tmp_path / "out.h5ad"
+    with pytest.raises((CountValidationError, ImporterSecurityError)):
+        GenericMatrixImporter(DEFAULT_TEST_CONFIG).canonicalize(
+            bundle, str(output), Organism.HUMAN, GeneIdScheme.ENSEMBL, mapping=mapping
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "token",
+    [" ENSG00000141510.7", "ENSG00000141510.7 ", "\tENSG00000141510.7", "ENSG00000141510.7\n"],
+)
+def test_generic_genes_by_cells_feature_value_not_normalized(tmp_path: Path, token: str) -> None:
+    matrix = tmp_path / "matrix.csv"
+    create_csv_matrix(matrix, [[token, 1]], ["gene", "CELL_A-1"])
+    bundle = create_source_set([create_source_file(matrix, ImportFileRole.MATRIX)])
+    mapping = make_mapping(
+        orientation=MatrixOrientation.GENES_BY_CELLS, matrix_feature_id_column="gene"
+    )
+    with pytest.raises((CountValidationError, ImporterSecurityError)):
+        GenericMatrixImporter(DEFAULT_TEST_CONFIG).canonicalize(
+            bundle,
+            str(tmp_path / "out.h5ad"),
+            Organism.HUMAN,
+            GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+
+
+@pytest.mark.parametrize("value", [1, 1.0, True, None])
+def test_generic_nonstring_identity_not_coerced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    import cellweave_science.importers.generic as generic_module
+
+    matrix = tmp_path / "matrix.csv"
+    create_csv_matrix(matrix, [["source_cell", 1]], ["cell", "ENSG00000141510.7"])
+    original_reader = generic_module.read_delimited_table
+
+    def reader(
+        file_path: Path | str, limits: DecompressionLimits, expected_delim: str | None = None
+    ) -> tuple[pd.DataFrame, str]:
+        frame, delimiter = original_reader(file_path, limits, expected_delim)
+        if Path(file_path) == matrix:
+            frame.loc[0, "cell"] = value
+        return frame, delimiter
+
+    monkeypatch.setattr(generic_module, "read_delimited_table", reader)
+    bundle = create_source_set([create_source_file(matrix, ImportFileRole.MATRIX)])
+    mapping = make_mapping(
+        matrix_cell_id_column="cell", orientation=MatrixOrientation.CELLS_BY_GENES
+    )
+    with pytest.raises((CountValidationError, ImporterSecurityError)):
+        GenericMatrixImporter(DEFAULT_TEST_CONFIG).canonicalize(
+            bundle,
+            str(tmp_path / "out.h5ad"),
+            Organism.HUMAN,
+            GeneIdScheme.ENSEMBL,
+            mapping=mapping,
+        )
+
+
 def test_generic_matrix_importer_protocol_conformance() -> None:
     importer = GenericMatrixImporter(DEFAULT_TEST_CONFIG)
     assert isinstance(importer, DatasetImporter)
@@ -206,6 +326,52 @@ def test_generic_matrix_importer_protocol_conformance() -> None:
     assert hasattr(importer, "validate")
     assert hasattr(importer, "inspect")
     assert hasattr(importer, "canonicalize")
+
+
+@pytest.mark.parametrize(
+    "source_value,mapping_value,target_key",
+    [
+        ("donor ", "donor", "SMP-key.7"),
+        ("donor", "donor ", "SMP-key.7"),
+        ("donor", "donor", " SMP-key.7 "),
+        ("Donor_α", "Donor_α", "SMP-key.7"),
+    ],
+)
+def test_generic_sample_mapping_exactness(
+    tmp_path: Path, source_value: str, mapping_value: str, target_key: str
+) -> None:
+    matrix, cells = tmp_path / "matrix.csv", tmp_path / "cells.csv"
+    create_csv_matrix(matrix, [["AAACCCAAGT-1", 1]], ["cell", "ENSG00000141510.7"])
+    create_csv_matrix(cells, [["AAACCCAAGT-1", source_value]], ["join", "sample"])
+    bundle = create_source_set(
+        [
+            create_source_file(matrix, ImportFileRole.MATRIX),
+            create_source_file(cells, ImportFileRole.CELL_METADATA),
+        ]
+    )
+    mapping = make_mapping(
+        orientation=MatrixOrientation.CELLS_BY_GENES,
+        matrix_cell_id_column="cell",
+        cell_metadata_join_column="join",
+        sample_column="sample",
+        sample_mappings=[SampleMappingEntry(sourceValue=mapping_value, sampleKey=target_key)],
+    )
+    output = tmp_path / "out.h5ad"
+    if source_value == "Donor_α":
+        GenericMatrixImporter(DEFAULT_TEST_CONFIG).canonicalize(
+            bundle, str(output), Organism.HUMAN, GeneIdScheme.ENSEMBL, mapping=mapping
+        )
+        result = ad.read_h5ad(output)
+        assert result.obs_names.tolist() == ["AAACCCAAGT-1"]
+        assert result.var_names.tolist() == ["ENSG00000141510.7"]
+        assert result.var["source_feature_id"].tolist() == ["ENSG00000141510.7"]
+        assert result.obs["sample_key"].tolist() == [target_key]
+    else:
+        with pytest.raises((CountValidationError, ImporterSecurityError)):
+            GenericMatrixImporter(DEFAULT_TEST_CONFIG).canonicalize(
+                bundle, str(output), Organism.HUMAN, GeneIdScheme.ENSEMBL, mapping=mapping
+            )
+        assert not output.exists()
 
 
 def test_generic_matrix_config_fail_closed() -> None:

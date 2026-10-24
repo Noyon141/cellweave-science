@@ -15,6 +15,117 @@ from cellweave_science.importers.canonical import (
 )
 from cellweave_science.importers.errors import CanonicalValidationError, CountValidationError
 
+
+@pytest.mark.parametrize(
+    "slot,key",
+    [
+        *[
+            ("uns", key)
+            for key in [
+                "source_checksum",
+                "canonical_checksum",
+                "organization_id",
+                "project_id",
+                "storage_key",
+                "random_metadata",
+                "neighbors",
+                "leiden",
+                "qc_metrics",
+            ]
+        ],
+        *[
+            ("obs", key)
+            for key in [
+                "cellAxisIndexColumn",
+                "source_row_number",
+                "raw_annotation",
+                "qc_total_counts",
+                "leiden",
+            ]
+        ],
+        *[
+            ("var", key)
+            for key in [
+                "featureAxisIndexColumn",
+                "highly_variable",
+                "mean",
+                "dispersion",
+                "qc_metric",
+                "source_random_column",
+            ]
+        ],
+    ],
+)
+def test_canonical_rejects_unauthorized_metadata_without_mutation(slot: str, key: str) -> None:
+    adata = build_canonical_anndata(
+        sp.csr_matrix([[1]]), obs_names=["CELL_A-1"], var_names=["ENSG00000141510.7"]
+    )
+    container = getattr(adata, slot)
+    container[key] = "prohibited"
+    before = adata.copy()
+    with pytest.raises(CanonicalValidationError, match=f"unauthorized {slot}"):
+        validate_canonical_anndata(adata)
+    pd.testing.assert_frame_equal(adata.obs, before.obs)
+    pd.testing.assert_frame_equal(adata.var, before.var)
+    assert adata.uns == before.uns
+    assert (adata.X != before.X).nnz == 0
+
+
+def test_canonical_optional_metadata_and_exact_identities_do_not_mutate() -> None:
+    obs = pd.DataFrame(
+        {
+            col: ["value"]
+            for col in [
+                "sample_key",
+                "condition",
+                "batch",
+                "biological_replicate",
+                "technical_replicate",
+            ]
+        },
+        index=["AAACCCAAGT-1"],
+    )
+    var = pd.DataFrame(
+        {"source_feature_id": ["probe_α.7"], "gene_symbol": ["TP53"]}, index=["ENSG00000141510.7"]
+    )
+    adata = build_canonical_anndata(
+        sp.csr_matrix([[1]]),
+        obs=obs,
+        var=var,
+        organism=Organism.HUMAN,
+        gene_id_scheme=GeneIdScheme.ENSEMBL,
+        reference_build="GRCh38",
+    )
+    before = adata.copy()
+    validate_canonical_anndata(adata)
+    assert list(adata.obs_names) == list(obs.index)
+    assert list(adata.var_names) == list(var.index)
+    pd.testing.assert_frame_equal(adata.obs, before.obs)
+    pd.testing.assert_frame_equal(adata.var, before.var)
+    assert adata.uns == before.uns
+
+
+@pytest.mark.parametrize("value", [" source ", 1, 1.0, True, None])
+def test_canonical_source_feature_identity_is_not_normalized(value: object) -> None:
+    adata = build_canonical_anndata(sp.csr_matrix([[1]]), obs_names=["c1"], var_names=["g1"])
+    adata.var["source_feature_id"] = [value]
+    with pytest.raises(CountValidationError):
+        validate_canonical_anndata(adata)
+
+
+@pytest.mark.parametrize("axis", ["obs", "var"])
+@pytest.mark.parametrize("value", [" invalid ", 1, 1.0, True, None])
+def test_canonical_validator_rejects_invalid_index_without_rewriting(
+    axis: str, value: object
+) -> None:
+    adata = build_canonical_anndata(sp.csr_matrix([[1]]), obs_names=["c1"], var_names=["g1"])
+    frame = getattr(adata, axis)
+    frame.index = pd.Index([value], dtype=object)
+    with pytest.raises(CountValidationError):
+        validate_canonical_anndata(adata)
+    assert frame.index.tolist() == [value]
+
+
 # =========================================================================
 # POSITIVE MATRIX TESTS
 # =========================================================================

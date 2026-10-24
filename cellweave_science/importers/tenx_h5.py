@@ -50,6 +50,7 @@ from cellweave_science.importers.sources import ImportSourceSet
 from cellweave_science.importers.tenx_shared import (
     GENE_EXPRESSION_MODALITY,
     TenxImporterConfig,
+    decode_hdf5_string,
 )
 from cellweave_science.importers.validation import (
     CountClassification,
@@ -269,10 +270,7 @@ class TenxH5Importer:
                         )
                     ]
 
-                clean_barcodes = [
-                    str(b.decode("utf-8") if isinstance(b, bytes) else b).strip()
-                    for b in raw_barcodes
-                ]
+                clean_barcodes = [decode_hdf5_string(b) for b in raw_barcodes]
                 try:
                     validate_identifiers(clean_barcodes, context="cell barcodes (obs_names)")
                 except CountValidationError as exc:
@@ -304,15 +302,10 @@ class TenxH5Importer:
                         )
                     ]
 
-                clean_feat_ids = [
-                    str(f.decode("utf-8") if isinstance(f, bytes) else f).strip()
-                    for f in raw_feat_ids
-                ]
-                clean_feat_types = [
-                    str(t.decode("utf-8") if isinstance(t, bytes) else t).strip()
-                    for t in raw_feat_types
-                ]
+                clean_feat_ids = [decode_hdf5_string(f) for f in raw_feat_ids]
+                clean_feat_types = [decode_hdf5_string(t) for t in raw_feat_types]
 
+                validate_identifiers(clean_feat_ids, context="feature IDs", require_unique=False)
                 # Check for empty identifiers
                 for idx, fid in enumerate(clean_feat_ids):
                     if not fid:
@@ -436,9 +429,7 @@ class TenxH5Importer:
             n_features, n_barcodes = int(shape[0]), int(shape[1])
 
             feat_ids_raw = matrix_grp["features"]["id"][:]
-            clean_feat_ids = [
-                str(f.decode("utf-8") if isinstance(f, bytes) else f).strip() for f in feat_ids_raw
-            ]
+            clean_feat_ids = [decode_hdf5_string(f) for f in feat_ids_raw]
 
         # Species conflict check
         inspection_issues: list[ScientificIssue] = []
@@ -550,15 +541,9 @@ class TenxH5Importer:
             feat_ids_raw = matrix_grp["features"]["id"][:]
             feat_names_raw = matrix_grp["features"]["name"][:]
 
-        clean_barcodes = [
-            str(b.decode("utf-8") if isinstance(b, bytes) else b).strip() for b in barcodes_raw
-        ]
-        clean_feat_ids = [
-            str(f.decode("utf-8") if isinstance(f, bytes) else f).strip() for f in feat_ids_raw
-        ]
-        clean_feat_names = [
-            str(f.decode("utf-8") if isinstance(f, bytes) else f).strip() for f in feat_names_raw
-        ]
+        clean_barcodes = [decode_hdf5_string(b) for b in barcodes_raw]
+        clean_feat_ids = [decode_hdf5_string(f) for f in feat_ids_raw]
+        clean_feat_names = [decode_hdf5_string(f) for f in feat_names_raw]
 
         # Species conflict check against confirmed organism
         if check_ensembl_species_conflict(clean_feat_ids):
