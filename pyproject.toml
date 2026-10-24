@@ -31,7 +31,8 @@ dependencies = [
     "scanpy>=1.9.0,<1.11.0",
     "scvi-tools>=1.1.0,<1.2.0",
     "structlog>=24.1.0,<25.0.0",
-    "modal>=0.62.0,<1.0.0",
+    "modal==0.77.0",
+    "fastapi==0.115.12",
     "typing-extensions>=4.9.0",
 ]
 

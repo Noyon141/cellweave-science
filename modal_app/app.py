@@ -35,6 +35,7 @@ if _MODAL_AVAILABLE and modal is not None:
             "structlog>=24.1.0,<25.0.0",
         )
     )
+    science_image = science_image.add_local_python_source("modal_app")
     app = modal.App(name=APP_NAME, image=science_image)
 else:  # pragma: no cover
     science_image = None  # type: ignore[assignment]
@@ -56,4 +57,4 @@ def healthcheck() -> dict[str, Any]:
 
 # Register healthcheck with Modal App if Modal is present
 if _MODAL_AVAILABLE and app is not None:
-    healthcheck = app.function(cpu=1.0, memory=1024)(healthcheck)  # type: ignore[assignment]
+    healthcheck = app.function(cpu=1.0, memory=1024, include_source=False)(healthcheck)  # type: ignore[assignment]
